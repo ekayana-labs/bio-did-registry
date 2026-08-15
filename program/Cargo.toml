@@ -1,0 +1,37 @@
+[package]
+name = "did-bio-registry"
+version = "0.1.0"
+description = "The Solana verifiable data registry backing the did:bio DID method"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "did_bio_registry"
+
+[features]
+default = []
+# Build as a library (for CPI callers and clients) without the entrypoint.
+no-entrypoint = []
+
+[dependencies]
+pinocchio = { version = "0.11.2", features = ["account-resize"] }
+pinocchio-system = "0.6.1"
+five8_const = "1.0.0"
+
+[dev-dependencies]
+# 0.10 pinned: newer litesvm needs a Rust release beyond the pinned toolchain.
+litesvm = "0.10"
+solana-message = "3"
+solana-transaction = "3"
+solana-signer = "3"
+solana-keypair = "3"
+solana-pubkey = "3"
+solana-instruction = "3"
+base64 = "0.22"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
