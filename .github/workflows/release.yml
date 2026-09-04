@@ -1,0 +1,58 @@
+name: release
+
+# Publishes the program crate to crates.io through Trusted Publishing when a
+# `v*` tag is pushed. No long lived API token: the job exchanges a GitHub
+# OIDC token for a short lived crates.io token. Configure the trusted
+# publisher on crates.io (repository ekayana-labs/bio-did-registry, workflow
+# release.yml, environment release) after the first manual publish.
+#
+# The verified program binary is built with solana-verify and attached to
+# the GitHub release by hand; see "Building and Verifying" in README.md.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.89.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Tag must match the crate version
+        id: crate
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "bio-did-registry") | .version')
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != crate v$version"; exit 1; }
+          # The first release is published by hand; skip versions crates.io already has.
+          if curl -sf -A "release.yml (github.com/ekayana-labs/bio-did-registry)" \
+               "https://crates.io/api/v1/crates/bio-did-registry/$version" -o /dev/null; then
+            echo "published=true" >> "$GITHUB_OUTPUT"; echo "bio-did-registry $version is already on crates.io; nothing to do"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v3.1.10/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - run: cargo build-sbf --manifest-path program/Cargo.toml
+      - run: cargo test
+      - uses: rust-lang/crates-io-auth-action@v1
+        if: steps.crate.outputs.published == 'false'
+        id: auth
+      - run: cargo publish -p bio-did-registry
+        if: steps.crate.outputs.published == 'false'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
