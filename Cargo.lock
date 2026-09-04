@@ -441,6 +441,7 @@ dependencies = [
  "litesvm",
  "pinocchio",
  "pinocchio-system",
+ "solana-address 2.7.0",
  "solana-instruction",
  "solana-keypair",
  "solana-message",

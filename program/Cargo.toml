@@ -7,6 +7,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+readme = "../README.md"
+keywords = ["solana", "did", "identity", "pinocchio"]
+categories = ["cryptography", "authentication"]
 
 [lib]
 crate-type = ["cdylib", "lib"]
@@ -21,6 +24,10 @@ no-entrypoint = []
 pinocchio = { version = "0.11.2", features = ["account-resize"] }
 pinocchio-system = "0.6.1"
 five8_const = "1.0.0"
+
+# On host targets the PDA functions need solana-address's pure Rust fallback.
+[target.'cfg(not(target_os = "solana"))'.dependencies]
+solana-address = { version = "2", features = ["curve25519"] }
 
 [dev-dependencies]
 # 0.10 pinned: newer litesvm needs a Rust release beyond the pinned toolchain.

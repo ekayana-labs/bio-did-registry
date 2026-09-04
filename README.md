@@ -55,6 +55,29 @@ resolver crate:
 See the [did:bio method specification](https://github.com/ekayana-labs/did-bio-spec)
 for the account layout, resolution algorithm, and security analysis.
 
+## Using the crate
+
+The program is published to [crates.io](https://crates.io/crates/bio-did-registry)
+so clients and CPI callers share its constants instead of re-deriving them:
+
+```toml
+[dependencies]
+bio-did-registry = { version = "0.1", features = ["no-entrypoint"] }
+```
+
+`no-entrypoint` leaves out the entrypoint, allocator, and panic handler so
+the crate links into an ordinary binary or another program. It exports:
+
+- `ID` - the program address
+- `ix` - the eight instruction discriminators
+- `state` - the account discriminator, PDA seed, size limits, verification
+  method type and flag constants, and the `Sections` parser for the account
+  layout
+- `events` - the three event discriminators
+- `error::DidError` - the domain errors behind custom codes `6000..=6014`
+
+The crate is `no_std` on the Solana target and a normal library elsewhere.
+
 ## Security
 
 This program has **not yet received an external audit**. See

@@ -18,7 +18,7 @@
 //! vectors in this repository's test suite; deployed resolvers and clients
 //! depend on every byte of it.
 
-#![no_std]
+#![cfg_attr(target_os = "solana", no_std)]
 
 pub mod error;
 pub mod events;
