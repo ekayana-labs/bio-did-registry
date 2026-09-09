@@ -119,6 +119,102 @@ pub const fn service_space(fragment_len: usize, type_len: usize, endpoint_len: u
 }
 
 // ---------------------------------------------------------------------------
+// Key buffer: staging account for keys larger than one transaction
+// ---------------------------------------------------------------------------
+//
+// A 2592 byte ML-DSA-87 key cannot travel in a single 1232 byte transaction,
+// so it is uploaded in chunks into a `KeyBuffer` PDA and then appended to
+// the DID account by `add_verification_method_from_buffer`. Layout:
+//
+// ```text
+// 0    [u8; 8]  discriminator sha256("account:KeyBuffer")[..8]
+// 8    [u8;32]  did_account   the DID this key is destined for
+// 40   [u8;32]  authority     the only key allowed to write, finish, or close
+// 72   u8       bump
+// 73   u8       method_type
+// 74   u16      flags (LE)
+// 76   u32      key_len (LE)  total key length, fixed at creation
+// 80   u32      written (LE)  bytes received so far, always a prefix
+// 84   u32      fragment_len (LE)
+// 88   [u8;32]  fragment, zero padded
+// 120  [u8]     key bytes (key_len)
+// ```
+
+/// sha256("account:KeyBuffer")[..8].
+pub const KEY_BUFFER_DISCRIMINATOR: [u8; 8] = [150, 138, 44, 35, 255, 159, 45, 0];
+
+/// PDA seed prefix: ["bio-did-key", did_account, authority].
+pub const KEY_BUFFER_SEED: &[u8] = b"bio-did-key";
+
+pub const KB_OFF_DID_ACCOUNT: usize = 8;
+pub const KB_OFF_AUTHORITY: usize = 40;
+pub const KB_OFF_BUMP: usize = 72;
+pub const KB_OFF_METHOD_TYPE: usize = 73;
+pub const KB_OFF_FLAGS: usize = 74;
+pub const KB_OFF_KEY_LEN: usize = 76;
+pub const KB_OFF_WRITTEN: usize = 80;
+pub const KB_OFF_FRAGMENT_LEN: usize = 84;
+pub const KB_OFF_FRAGMENT: usize = 88;
+/// Offset of the key bytes; also the fixed header size.
+pub const KB_OFF_KEY: usize = KB_OFF_FRAGMENT + MAX_FRAGMENT_LEN;
+pub const KEY_BUFFER_HEADER: usize = KB_OFF_KEY;
+
+/// A parsed key buffer header, borrowed from the account buffer.
+#[derive(Clone, Copy, Debug)]
+pub struct KeyBufferRef<'a> {
+    pub did_account: &'a [u8],
+    pub authority: &'a [u8],
+    pub bump: u8,
+    pub method_type: u8,
+    pub flags: u16,
+    pub key_len: usize,
+    pub written: usize,
+    pub fragment: &'a [u8],
+}
+
+impl<'a> KeyBufferRef<'a> {
+    /// Read the header of a buffer whose discriminator was already checked.
+    /// The data length must match the declared key length exactly.
+    pub fn parse(data: &'a [u8]) -> Result<Self, ProgramError> {
+        if data.len() < KEY_BUFFER_HEADER {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        let key_len =
+            u32::from_le_bytes(data[KB_OFF_KEY_LEN..KB_OFF_KEY_LEN + 4].try_into().unwrap())
+                as usize;
+        let written =
+            u32::from_le_bytes(data[KB_OFF_WRITTEN..KB_OFF_WRITTEN + 4].try_into().unwrap())
+                as usize;
+        let fragment_len = u32::from_le_bytes(
+            data[KB_OFF_FRAGMENT_LEN..KB_OFF_FRAGMENT_LEN + 4]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        if data.len() != KEY_BUFFER_HEADER + key_len
+            || written > key_len
+            || fragment_len > MAX_FRAGMENT_LEN
+        {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        Ok(Self {
+            did_account: &data[KB_OFF_DID_ACCOUNT..KB_OFF_DID_ACCOUNT + 32],
+            authority: &data[KB_OFF_AUTHORITY..KB_OFF_AUTHORITY + 32],
+            bump: data[KB_OFF_BUMP],
+            method_type: data[KB_OFF_METHOD_TYPE],
+            flags: u16::from_le_bytes(data[KB_OFF_FLAGS..KB_OFF_FLAGS + 2].try_into().unwrap()),
+            key_len,
+            written,
+            fragment: &data[KB_OFF_FRAGMENT..KB_OFF_FRAGMENT + fragment_len],
+        })
+    }
+
+    /// The key bytes received so far.
+    pub fn key(&self, data: &'a [u8]) -> &'a [u8] {
+        &data[KB_OFF_KEY..KB_OFF_KEY + self.written]
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Bounds-checked cursor reads
 // ---------------------------------------------------------------------------
 
