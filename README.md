@@ -1,5 +1,14 @@
 # did:bio Registry Program
 
+[![CI](https://github.com/ekayana-labs/bio-did-registry/actions/workflows/main.yml/badge.svg)](https://github.com/ekayana-labs/bio-did-registry/actions/workflows/main.yml)
+[![verified build](https://github.com/ekayana-labs/bio-did-registry/actions/workflows/verified-build.yml/badge.svg)](https://github.com/ekayana-labs/bio-did-registry/actions/workflows/verified-build.yml)
+[![crates.io](https://img.shields.io/crates/v/bio-did-registry.svg)](https://crates.io/crates/bio-did-registry)
+[![docs.rs](https://img.shields.io/docsrs/bio-did-registry)](https://docs.rs/bio-did-registry)
+[![MSRV](https://img.shields.io/crates/msrv/bio-did-registry)](Cargo.toml)
+[![license](https://img.shields.io/crates/l/bio-did-registry)](LICENSE)
+[![devnet](https://img.shields.io/badge/solana%20devnet-H1gn...3Xxy6-0d9488)](https://explorer.solana.com/address/H1gnV4GjNT3UV7AgGNUCkSaciuVVtM7hKb8JhPV3Xxy6?cluster=devnet)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/ekayana-labs/bio-did-registry/badge)](https://scorecard.dev/viewer/?uri=github.com/ekayana-labs/bio-did-registry)
+
 The Solana verifiable data registry backing the
 [`did:bio`](https://github.com/ekayana-labs/did-bio-spec) W3C DID method -
 decentralized identifiers for researchers, datasets, and research
