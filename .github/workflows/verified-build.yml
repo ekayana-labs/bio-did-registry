@@ -1,0 +1,74 @@
+name: verified build
+
+# Reproduces the program binary with solana-verify in its fixed container,
+# records the hash next to the hash currently deployed on devnet, attests
+# the artifact's provenance, and attaches it to the GitHub release of the
+# tag. Run it by hand from the Actions tab to rehearse before tagging.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PROGRAM_ID: H1gnV4GjNT3UV7AgGNUCkSaciuVVtM7hKb8JhPV3Xxy6
+  SOLANA_VERIFY_VERSION: 0.5.1
+
+jobs:
+  build:
+    name: Reproducible program binary
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: 1.89.0
+      - name: Cache solana-verify
+        id: solana-verify
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/solana-verify
+          key: solana-verify-${{ env.SOLANA_VERIFY_VERSION }}-${{ runner.os }}
+      - name: Install solana-verify
+        if: steps.solana-verify.outputs.cache-hit != 'true'
+        run: cargo install solana-verify --version "$SOLANA_VERIFY_VERSION" --locked
+      - name: Build in the verifiable container
+        run: solana-verify build --library-name bio_did_registry
+      - name: Hash
+        id: hash
+        run: |
+          hash=$(solana-verify get-executable-hash target/deploy/bio_did_registry.so | tail -1)
+          deployed=$(solana-verify get-program-hash -u devnet "$PROGRAM_ID" 2>/dev/null | tail -1 || echo unavailable)
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
+          {
+            echo "| | hash |"
+            echo "|---|---|"
+            echo "| this build | \`$hash\` |"
+            echo "| deployed on devnet | \`$deployed\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bio_did_registry-${{ github.ref_name }}
+          path: target/deploy/bio_did_registry.so
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: target/deploy/bio_did_registry.so
+      - name: Attach to the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HASH: ${{ steps.hash.outputs.hash }}
+        run: |
+          so="bio_did_registry-${GITHUB_REF_NAME}.so"
+          cp target/deploy/bio_did_registry.so "$so"
+          echo "$HASH  $so" > "$so.sha256"
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --draft --title "bio-did-registry ${GITHUB_REF_NAME#v}" --notes "Verified build hash: $HASH"
+          gh release upload "$GITHUB_REF_NAME" "$so" "$so.sha256" --clobber
