@@ -1,5 +1,6 @@
 //! Domain errors, surfaced as custom program error codes starting at 6000.
-//! The numbering is part of the frozen wire format that clients rely on.
+//! The numbering is part of the frozen wire format that clients rely on;
+//! new codes are only ever appended.
 
 use pinocchio::error::ProgramError;
 
@@ -36,6 +37,12 @@ pub enum DidError {
     InvalidController = 6013,
     /// Service type or endpoint is empty, too long, or not printable ASCII
     InvalidServiceValue = 6014,
+    /// Key buffer is not bound to this DID and authority
+    InvalidKeyBuffer = 6015,
+    /// Chunk does not continue the bytes written so far, or runs past the key length
+    InvalidKeyChunk = 6016,
+    /// Key buffer has not received every byte of the key yet
+    KeyBufferIncomplete = 6017,
 }
 
 impl From<DidError> for ProgramError {

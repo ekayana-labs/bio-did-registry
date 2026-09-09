@@ -363,6 +363,9 @@ fn send_meta(
     payer: &Keypair,
     extra_signers: &[&Keypair],
 ) -> Result<litesvm::types::TransactionMetadata, String> {
+    // A fresh blockhash per send: a retry of an instruction that failed
+    // earlier is then a new transaction, not a rejected duplicate.
+    svm.expire_blockhash();
     let blockhash = svm.latest_blockhash();
     let msg = Message::new_with_blockhash(&[ix], Some(&payer.pubkey()), &blockhash);
     let mut signers: Vec<&Keypair> = vec![payer];
@@ -1067,4 +1070,661 @@ fn test_events_wire_format() {
 
     let meta = send_meta(&mut svm, deactivate_ix(&s, &s, &s), &subject, &[]).unwrap();
     assert_event(&meta, [6, 124, 31, 30, 191, 92, 197, 57], 3); // DidDeactivated
+}
+
+// ---------------------------------------------------------------------------
+// Key buffers: chunked upload of keys larger than one transaction
+// ---------------------------------------------------------------------------
+
+/// sha256("account:KeyBuffer")[..8].
+const KEY_BUFFER_DISCRIMINATOR: [u8; 8] = [150, 138, 44, 35, 255, 159, 45, 0];
+const IX_CREATE_KEY_BUFFER: [u8; 8] = [138, 70, 101, 189, 154, 98, 203, 23];
+const IX_WRITE_KEY_BUFFER: [u8; 8] = [61, 88, 82, 10, 227, 249, 18, 117];
+const IX_ADD_VM_FROM_BUFFER: [u8; 8] = [111, 184, 129, 9, 216, 207, 122, 90];
+const IX_CLOSE_KEY_BUFFER: [u8; 8] = [6, 209, 103, 32, 78, 18, 70, 184];
+const KEY_BUFFER_HEADER: usize = 120;
+/// The largest transaction a Solana cluster accepts.
+const PACKET_DATA_SIZE: usize = 1232;
+/// Chunk size that keeps a single signer `write_key_buffer` under the limit.
+const CHUNK: usize = 900;
+
+fn key_buffer_pda(subject: &Pubkey, authority: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(
+        &[
+            b"bio-did-key",
+            did_pda(subject).as_ref(),
+            authority.as_ref(),
+        ],
+        &program_id(),
+    )
+    .0
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct KeyBuffer {
+    did_account: [u8; 32],
+    authority: [u8; 32],
+    method_type: u8,
+    flags: u16,
+    key_len: usize,
+    written: usize,
+    fragment: String,
+    key: Vec<u8>,
+}
+
+/// Parse a KeyBuffer by its documented layout, asserting the account is
+/// exactly header + key_len bytes.
+fn parse_key_buffer(data: &[u8]) -> KeyBuffer {
+    assert_eq!(
+        data[0..8],
+        KEY_BUFFER_DISCRIMINATOR,
+        "key buffer discriminator"
+    );
+    let mut c = Cursor { data, off: 8 };
+    let did_account = c.bytes(32).try_into().unwrap();
+    let authority = c.bytes(32).try_into().unwrap();
+    let _bump = c.bytes(1)[0];
+    let method_type = c.bytes(1)[0];
+    let flags = u16::from_le_bytes(c.bytes(2).try_into().unwrap());
+    let key_len = c.u32() as usize;
+    let written = c.u32() as usize;
+    let fragment_len = c.u32() as usize;
+    let fragment = String::from_utf8(c.bytes(fragment_len).to_vec()).unwrap();
+    c.off = KEY_BUFFER_HEADER;
+    let key = c.bytes(key_len).to_vec();
+    assert_eq!(c.off, data.len(), "buffer is header + key_len");
+    KeyBuffer {
+        did_account,
+        authority,
+        method_type,
+        flags,
+        key_len,
+        written,
+        fragment,
+        key,
+    }
+}
+
+fn decode_key_buffer(svm: &LiteSVM, address: &Pubkey) -> KeyBuffer {
+    let account = svm.get_account(address).unwrap();
+    assert_eq!(account.owner, program_id(), "key buffer owner");
+    parse_key_buffer(&account.data)
+}
+
+fn buffer_gone(svm: &LiteSVM, address: &Pubkey) -> bool {
+    svm.get_account(address)
+        .is_none_or(|a| a.lamports == 0 && a.data.is_empty())
+}
+
+fn buffer_metas(payer: &Pubkey, authority: &Pubkey, subject: &Pubkey) -> Vec<AccountMeta> {
+    vec![
+        AccountMeta::new(*payer, true),
+        AccountMeta::new_readonly(*authority, true),
+        AccountMeta::new(did_pda(subject), false),
+        AccountMeta::new(key_buffer_pda(subject, authority), false),
+        AccountMeta::new_readonly(system_program(), false),
+    ]
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create_key_buffer_ix(
+    payer: &Pubkey,
+    authority: &Pubkey,
+    subject: &Pubkey,
+    fragment: &str,
+    method_type: u8,
+    flags: u16,
+    key_len: u32,
+) -> Instruction {
+    let mut data = IX_CREATE_KEY_BUFFER.to_vec();
+    put_str(&mut data, fragment);
+    data.push(method_type);
+    data.extend_from_slice(&flags.to_le_bytes());
+    data.extend_from_slice(&key_len.to_le_bytes());
+    Instruction {
+        program_id: program_id(),
+        accounts: buffer_metas(payer, authority, subject),
+        data,
+    }
+}
+
+fn write_key_buffer_ix(
+    authority: &Pubkey,
+    key_buffer: &Pubkey,
+    offset: u32,
+    chunk: &[u8],
+) -> Instruction {
+    let mut data = IX_WRITE_KEY_BUFFER.to_vec();
+    data.extend_from_slice(&offset.to_le_bytes());
+    put_bytes(&mut data, chunk);
+    Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new_readonly(*authority, true),
+            AccountMeta::new(*key_buffer, false),
+        ],
+        data,
+    }
+}
+
+fn add_vm_from_buffer_ix(
+    payer: &Pubkey,
+    authority: &Pubkey,
+    did_account: &Pubkey,
+    key_buffer: &Pubkey,
+) -> Instruction {
+    Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new(*payer, true),
+            AccountMeta::new_readonly(*authority, true),
+            AccountMeta::new(*did_account, false),
+            AccountMeta::new(*key_buffer, false),
+            AccountMeta::new_readonly(system_program(), false),
+        ],
+        data: IX_ADD_VM_FROM_BUFFER.to_vec(),
+    }
+}
+
+fn close_key_buffer_ix(payer: &Pubkey, authority: &Pubkey, key_buffer: &Pubkey) -> Instruction {
+    Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new(*payer, true),
+            AccountMeta::new_readonly(*authority, true),
+            AccountMeta::new(*key_buffer, false),
+        ],
+        data: IX_CLOSE_KEY_BUFFER.to_vec(),
+    }
+}
+
+/// Upload `key` in CHUNK sized pieces, the authority paying for each write.
+fn upload(svm: &mut LiteSVM, authority: &Keypair, key_buffer: &Pubkey, key: &[u8]) {
+    for (i, chunk) in key.chunks(CHUNK).enumerate() {
+        send(
+            svm,
+            write_key_buffer_ix(&authority.pubkey(), key_buffer, (i * CHUNK) as u32, chunk),
+            authority,
+            &[],
+        )
+        .unwrap();
+    }
+}
+
+fn transaction_size(svm: &LiteSVM, ix: Instruction, payer: &Pubkey) -> usize {
+    let msg = Message::new_with_blockhash(&[ix], Some(payer), &svm.latest_blockhash());
+    // One signature plus its compact-u16 count, then the message.
+    1 + 64 + msg.serialize().len()
+}
+
+#[test]
+fn test_key_buffer_uploads_a_large_key() {
+    let mut svm = setup();
+    let subject = Keypair::new();
+    svm.airdrop(&subject.pubkey(), AIRDROP).unwrap();
+    let s = subject.pubkey();
+    send(&mut svm, initialize_ix(&s, &s), &subject, &[]).unwrap();
+    let pda = did_pda(&s);
+    let kb = key_buffer_pda(&s, &s);
+    let key: Vec<u8> = (0..2592u32).map(|i| (i * 7 % 251) as u8).collect();
+
+    // Why the buffer exists: the direct instruction cannot be sent to a
+    // cluster, every chunk can.
+    let direct = add_vm_ix(
+        &s,
+        &s,
+        &s,
+        "pq",
+        VM_TYPE_DILITHIUM5,
+        VM_FLAG_ASSERTION,
+        &key,
+    );
+    assert!(transaction_size(&svm, direct, &s) > PACKET_DATA_SIZE);
+    for chunk in key.chunks(CHUNK) {
+        let ix = write_key_buffer_ix(&s, &kb, 0, chunk);
+        assert!(transaction_size(&svm, ix, &s) <= PACKET_DATA_SIZE);
+    }
+
+    let before = svm.get_balance(&s).unwrap();
+    send(
+        &mut svm,
+        create_key_buffer_ix(
+            &s,
+            &s,
+            &s,
+            "pq",
+            VM_TYPE_DILITHIUM5,
+            VM_FLAG_ASSERTION,
+            2592,
+        ),
+        &subject,
+        &[],
+    )
+    .unwrap();
+    let buf = decode_key_buffer(&svm, &kb);
+    assert_eq!(buf.did_account, pda.to_bytes());
+    assert_eq!(buf.authority, s.to_bytes());
+    assert_eq!(buf.method_type, VM_TYPE_DILITHIUM5);
+    assert_eq!(buf.flags, VM_FLAG_ASSERTION);
+    assert_eq!((buf.key_len, buf.written), (2592, 0));
+    assert_eq!(buf.fragment, "pq");
+    assert!(buf.key.iter().all(|&b| b == 0));
+    let account = svm.get_account(&kb).unwrap();
+    assert_eq!(account.data.len(), KEY_BUFFER_HEADER + 2592);
+    assert_eq!(
+        account.lamports,
+        svm.minimum_balance_for_rent_exemption(KEY_BUFFER_HEADER + 2592),
+        "buffer is exactly rent exempt"
+    );
+
+    // Chunks must continue where the previous one ended.
+    let res = send(
+        &mut svm,
+        write_key_buffer_ix(&s, &kb, CHUNK as u32, &key[CHUNK..2 * CHUNK]),
+        &subject,
+        &[],
+    );
+    assert_custom_err(res, 6016, "InvalidKeyChunk (out of order)");
+    let res = send(
+        &mut svm,
+        write_key_buffer_ix(&s, &kb, 0, &[1u8; 2593]),
+        &subject,
+        &[],
+    );
+    assert_custom_err(res, 6016, "InvalidKeyChunk (past the end)");
+    let res = send(
+        &mut svm,
+        write_key_buffer_ix(&s, &kb, 0, &[]),
+        &subject,
+        &[],
+    );
+    assert_custom_err(res, 6016, "InvalidKeyChunk (empty)");
+    // Finishing before every byte arrived.
+    let res = send(
+        &mut svm,
+        add_vm_from_buffer_ix(&s, &s, &pda, &kb),
+        &subject,
+        &[],
+    );
+    assert_custom_err(res, 6017, "KeyBufferIncomplete");
+
+    upload(&mut svm, &subject, &kb, &key);
+    let buf = decode_key_buffer(&svm, &kb);
+    assert_eq!(buf.written, 2592);
+    assert_eq!(buf.key, key);
+    // The buffer is full: nothing more fits, and no second buffer can be
+    // opened by the same authority for the same DID.
+    let res = send(
+        &mut svm,
+        write_key_buffer_ix(&s, &kb, 2592, &[1]),
+        &subject,
+        &[],
+    );
+    assert_custom_err(res, 6016, "InvalidKeyChunk (full)");
+    let res = send(
+        &mut svm,
+        create_key_buffer_ix(
+            &s,
+            &s,
+            &s,
+            "pq2",
+            VM_TYPE_DILITHIUM5,
+            VM_FLAG_ASSERTION,
+            2592,
+        ),
+        &subject,
+        &[],
+    );
+    assert!(res.unwrap_err().contains("AccountAlreadyInitialized"));
+
+    // Finish: the method lands, the buffer closes, DidModified is emitted.
+    let meta = send_meta(
+        &mut svm,
+        add_vm_from_buffer_ix(&s, &s, &pda, &kb),
+        &subject,
+        &[],
+    )
+    .unwrap();
+    {
+        use base64::Engine;
+        let payload = meta
+            .logs
+            .iter()
+            .find_map(|l| l.strip_prefix("Program data: "))
+            .expect("DidModified event");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(payload)
+            .unwrap();
+        assert_eq!(bytes[0..8], [127, 241, 158, 225, 33, 224, 88, 208]);
+        assert_eq!(bytes[72..80], 2u64.to_le_bytes());
+    }
+    let did = decode(&svm, &pda);
+    assert_eq!(did.version, 2);
+    assert_eq!(did.verification_methods.len(), 2);
+    let vm = &did.verification_methods[1];
+    assert_eq!(vm.fragment, "pq");
+    assert_eq!(vm.method_type, VM_TYPE_DILITHIUM5);
+    assert_eq!(vm.flags, VM_FLAG_ASSERTION);
+    assert_eq!(vm.key_data, key);
+    assert_eq!(
+        account_len(&svm, &pda),
+        INITIAL_SPACE + 4 + 2 + 1 + 2 + 4 + 2592
+    );
+    assert!(buffer_gone(&svm, &kb), "buffer closed after finishing");
+
+    // The payer funded the DID growth and fees; the buffer rent came back.
+    let after = svm.get_balance(&s).unwrap();
+    let growth = svm.minimum_balance_for_rent_exemption(account_len(&svm, &pda))
+        - svm.minimum_balance_for_rent_exemption(INITIAL_SPACE);
+    let buffer_rent = svm.minimum_balance_for_rent_exemption(KEY_BUFFER_HEADER + 2592);
+    assert!(before - after >= growth);
+    assert!(before - after < growth + buffer_rent / 2);
+
+    // A closed buffer is a plain system account again.
+    let res = send(
+        &mut svm,
+        write_key_buffer_ix(&s, &kb, 0, &[1]),
+        &subject,
+        &[],
+    );
+    assert!(res.unwrap_err().contains("InvalidAccountOwner"));
+}
+
+#[test]
+fn test_key_buffer_is_bound_to_its_authority_and_did() {
+    let mut svm = setup();
+    let subject = Keypair::new();
+    let rotation = Keypair::new();
+    let other = Keypair::new();
+    for k in [&subject, &rotation, &other] {
+        svm.airdrop(&k.pubkey(), AIRDROP).unwrap();
+    }
+    let (s, r, o) = (subject.pubkey(), rotation.pubkey(), other.pubkey());
+    send(&mut svm, initialize_ix(&s, &s), &subject, &[]).unwrap();
+    send(
+        &mut svm,
+        add_vm_ix(
+            &s,
+            &s,
+            &s,
+            "rot",
+            VM_TYPE_ED25519,
+            VM_FLAG_CAPABILITY_INVOCATION,
+            r.as_ref(),
+        ),
+        &subject,
+        &[],
+    )
+    .unwrap();
+    // A second DID on which the subject key is also an authority.
+    send(&mut svm, initialize_ix(&o, &o), &other, &[]).unwrap();
+    send(
+        &mut svm,
+        add_vm_ix(
+            &o,
+            &o,
+            &o,
+            "s",
+            VM_TYPE_ED25519,
+            VM_FLAG_CAPABILITY_INVOCATION,
+            s.as_ref(),
+        ),
+        &other,
+        &[],
+    )
+    .unwrap();
+
+    let kb = key_buffer_pda(&s, &s);
+    send(
+        &mut svm,
+        create_key_buffer_ix(
+            &s,
+            &s,
+            &s,
+            "k2",
+            VM_TYPE_ED25519,
+            VM_FLAG_AUTHENTICATION,
+            32,
+        ),
+        &subject,
+        &[],
+    )
+    .unwrap();
+
+    // The rotation key is an authority on the DID but not the buffer's owner.
+    let res = send(
+        &mut svm,
+        write_key_buffer_ix(&r, &kb, 0, &[9u8; 32]),
+        &rotation,
+        &[],
+    );
+    assert_custom_err(res, 6015, "InvalidKeyBuffer (write by another authority)");
+    upload(&mut svm, &subject, &kb, &[9u8; 32]);
+    let res = send(
+        &mut svm,
+        add_vm_from_buffer_ix(&r, &r, &did_pda(&s), &kb),
+        &rotation,
+        &[],
+    );
+    assert_custom_err(res, 6015, "InvalidKeyBuffer (finish by another authority)");
+    let res = send(&mut svm, close_key_buffer_ix(&r, &r, &kb), &rotation, &[]);
+    assert_custom_err(res, 6015, "InvalidKeyBuffer (close by another authority)");
+
+    // The subject cannot redirect its buffer into the other DID, even though
+    // it is an authority there too.
+    let res = send(
+        &mut svm,
+        add_vm_from_buffer_ix(&s, &s, &did_pda(&o), &kb),
+        &subject,
+        &[],
+    );
+    assert_custom_err(res, 6015, "InvalidKeyBuffer (wrong DID)");
+
+    // The owner reclaims the rent.
+    let before = svm.get_balance(&s).unwrap();
+    send(&mut svm, close_key_buffer_ix(&s, &s, &kb), &subject, &[]).unwrap();
+    assert!(buffer_gone(&svm, &kb));
+    assert!(svm.get_balance(&s).unwrap() > before);
+    let res = send(&mut svm, close_key_buffer_ix(&s, &s, &kb), &subject, &[]);
+    assert!(res.unwrap_err().contains("InvalidAccountOwner"));
+    assert_eq!(decode(&svm, &did_pda(&s)).verification_methods.len(), 2);
+}
+
+#[test]
+fn test_key_buffer_finish_revalidates_against_current_state() {
+    let mut svm = setup();
+    let subject = Keypair::new();
+    svm.airdrop(&subject.pubkey(), AIRDROP).unwrap();
+    let s = subject.pubkey();
+    send(&mut svm, initialize_ix(&s, &s), &subject, &[]).unwrap();
+    let pda = did_pda(&s);
+    let kb = key_buffer_pda(&s, &s);
+
+    send(
+        &mut svm,
+        create_key_buffer_ix(
+            &s,
+            &s,
+            &s,
+            "k2",
+            VM_TYPE_ED25519,
+            VM_FLAG_AUTHENTICATION,
+            32,
+        ),
+        &subject,
+        &[],
+    )
+    .unwrap();
+    upload(&mut svm, &subject, &kb, &[5u8; 32]);
+
+    // The fragment is taken through the direct path while the upload is pending.
+    send(
+        &mut svm,
+        add_vm_ix(
+            &s,
+            &s,
+            &s,
+            "k2",
+            VM_TYPE_ED25519,
+            VM_FLAG_AUTHENTICATION,
+            Keypair::new().pubkey().as_ref(),
+        ),
+        &subject,
+        &[],
+    )
+    .unwrap();
+    let res = send(
+        &mut svm,
+        add_vm_from_buffer_ix(&s, &s, &pda, &kb),
+        &subject,
+        &[],
+    );
+    assert_custom_err(res, 6003, "FragmentAlreadyInUse at finish");
+
+    // After deactivation the buffer cannot be finished, but it can be reclaimed.
+    send(&mut svm, deactivate_ix(&s, &s, &s), &subject, &[]).unwrap();
+    let res = send(
+        &mut svm,
+        add_vm_from_buffer_ix(&s, &s, &pda, &kb),
+        &subject,
+        &[],
+    );
+    assert_custom_err(res, 6001, "DidDeactivated at finish");
+    send(&mut svm, close_key_buffer_ix(&s, &s, &kb), &subject, &[]).unwrap();
+    assert!(buffer_gone(&svm, &kb));
+}
+
+#[test]
+fn test_create_key_buffer_validation() {
+    let mut svm = setup();
+    let subject = Keypair::new();
+    let outsider = Keypair::new();
+    svm.airdrop(&subject.pubkey(), AIRDROP).unwrap();
+    svm.airdrop(&outsider.pubkey(), AIRDROP).unwrap();
+    let s = subject.pubkey();
+    send(&mut svm, initialize_ix(&s, &s), &subject, &[]).unwrap();
+
+    let create = |fragment: &str, method_type: u8, flags: u16, key_len: u32| {
+        create_key_buffer_ix(&s, &s, &s, fragment, method_type, flags, key_len)
+    };
+    let res = send(
+        &mut svm,
+        create_key_buffer_ix(
+            &outsider.pubkey(),
+            &outsider.pubkey(),
+            &s,
+            "pq",
+            VM_TYPE_DILITHIUM5,
+            VM_FLAG_ASSERTION,
+            2592,
+        ),
+        &outsider,
+        &[],
+    );
+    assert_custom_err(res, 6000, "Unauthorized");
+    let res = send(
+        &mut svm,
+        create("default", VM_TYPE_DILITHIUM5, VM_FLAG_ASSERTION, 2592),
+        &subject,
+        &[],
+    );
+    assert_custom_err(res, 6003, "FragmentAlreadyInUse");
+    let res = send(
+        &mut svm,
+        create("no spaces!", VM_TYPE_DILITHIUM5, VM_FLAG_ASSERTION, 2592),
+        &subject,
+        &[],
+    );
+    assert_custom_err(res, 6002, "InvalidFragment");
+    let res = send(
+        &mut svm,
+        create("pq", VM_TYPE_DILITHIUM5, VM_FLAG_ASSERTION, 2591),
+        &subject,
+        &[],
+    );
+    assert_custom_err(res, 6009, "InvalidKeyLength");
+    let res = send(
+        &mut svm,
+        create(
+            "pq",
+            VM_TYPE_DILITHIUM5,
+            VM_FLAG_CAPABILITY_INVOCATION,
+            2592,
+        ),
+        &subject,
+        &[],
+    );
+    assert_custom_err(res, 6010, "InvalidFlags");
+    let res = send(
+        &mut svm,
+        create(
+            "pq",
+            VM_TYPE_DILITHIUM5,
+            VM_FLAG_ASSERTION | VM_FLAG_PROTECTED,
+            2592,
+        ),
+        &subject,
+        &[],
+    );
+    assert_custom_err(res, 6011, "ProtectedVerificationMethod (large key)");
+    let res = send(
+        &mut svm,
+        create("pq", 9, VM_FLAG_ASSERTION, 2592),
+        &subject,
+        &[],
+    );
+    assert!(res.unwrap_err().contains("InvalidInstructionData"));
+    // Nothing above left a buffer behind.
+    assert!(buffer_gone(&svm, &key_buffer_pda(&s, &s)));
+}
+
+#[test]
+fn test_key_buffer_protected_requires_own_key() {
+    let mut svm = setup();
+    let subject = Keypair::new();
+    svm.airdrop(&subject.pubkey(), AIRDROP).unwrap();
+    let s = subject.pubkey();
+    send(&mut svm, initialize_ix(&s, &s), &subject, &[]).unwrap();
+    let pda = did_pda(&s);
+    let kb = key_buffer_pda(&s, &s);
+    let flags = VM_FLAG_CAPABILITY_INVOCATION | VM_FLAG_PROTECTED;
+
+    // Someone else's key cannot be born protected, even through a buffer.
+    send(
+        &mut svm,
+        create_key_buffer_ix(&s, &s, &s, "self", VM_TYPE_ED25519, flags, 32),
+        &subject,
+        &[],
+    )
+    .unwrap();
+    upload(&mut svm, &subject, &kb, Keypair::new().pubkey().as_ref());
+    let res = send(
+        &mut svm,
+        add_vm_from_buffer_ix(&s, &s, &pda, &kb),
+        &subject,
+        &[],
+    );
+    assert_custom_err(res, 6011, "ProtectedVerificationMethod");
+    send(&mut svm, close_key_buffer_ix(&s, &s, &kb), &subject, &[]).unwrap();
+
+    // The signer's own key can.
+    send(
+        &mut svm,
+        create_key_buffer_ix(&s, &s, &s, "self", VM_TYPE_ED25519, flags, 32),
+        &subject,
+        &[],
+    )
+    .unwrap();
+    upload(&mut svm, &subject, &kb, s.as_ref());
+    send(
+        &mut svm,
+        add_vm_from_buffer_ix(&s, &s, &pda, &kb),
+        &subject,
+        &[],
+    )
+    .unwrap();
+    let did = decode(&svm, &pda);
+    assert_eq!(did.verification_methods[1].fragment, "self");
+    assert_eq!(did.verification_methods[1].flags, flags);
+    assert_eq!(did.verification_methods[1].key_data, s.to_bytes());
 }
