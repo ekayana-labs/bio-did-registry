@@ -31,6 +31,9 @@ allow = [
   "OpenSSL",
 ]
 confidence-threshold = 0.8
+# The list above is the policy, not an inventory: a permissive license that
+# nothing currently uses is not a finding.
+unused-allowed-license = "allow"
 
 [bans]
 multiple-versions = "warn"
