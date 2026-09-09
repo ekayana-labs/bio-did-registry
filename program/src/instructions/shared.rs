@@ -4,6 +4,10 @@
 //!   realloc-family instructions: [payer, authority, did_account, system_program]
 //!   set_verification_method_flags: [authority, did_account]
 //!   initialize: [payer, did_account, system_program]
+//!   create_key_buffer, add_verification_method_from_buffer:
+//!     [payer, authority, did_account, key_buffer, system_program]
+//!   write_key_buffer: [authority, key_buffer]
+//!   close_key_buffer: [payer, authority, key_buffer]
 
 use pinocchio::{
     error::ProgramError,
@@ -12,7 +16,11 @@ use pinocchio::{
 };
 use pinocchio_system::instructions::Transfer;
 
-use crate::state::{ACCOUNT_DISCRIMINATOR, BASE_SPACE, DID_SEED, OFF_BUMP, OFF_SUBJECT};
+use crate::error::{require, DidError};
+use crate::state::{
+    KeyBufferRef, ACCOUNT_DISCRIMINATOR, BASE_SPACE, DID_SEED, KEY_BUFFER_DISCRIMINATOR,
+    KEY_BUFFER_HEADER, KEY_BUFFER_SEED, OFF_BUMP, OFF_SUBJECT,
+};
 
 /// The payer funds rent growth and receives shrink refunds: signer + writable.
 #[inline]
@@ -42,13 +50,19 @@ pub fn check_system_program(system_program: &AccountView) -> Result<(), ProgramE
     Ok(())
 }
 
-/// Loads an existing `DidAccount`: writable, owned by this program, carrying
-/// the `DidAccount` discriminator, at the PDA ["bio-did", subject] with the
-/// stored bump. Returns the subject key (needed for events).
+/// Loads an existing `DidAccount` for mutation: everything
+/// [`load_did_account`] checks, plus the account must be writable.
 pub fn verify_did_account(did_account: &AccountView) -> Result<[u8; 32], ProgramError> {
     if !did_account.is_writable() {
         return Err(ProgramError::Immutable);
     }
+    load_did_account(did_account)
+}
+
+/// Loads an existing `DidAccount` read-only: owned by this program, carrying
+/// the `DidAccount` discriminator, at the PDA ["bio-did", subject] with the
+/// stored bump. Returns the subject key (needed for events).
+pub fn load_did_account(did_account: &AccountView) -> Result<[u8; 32], ProgramError> {
     if !did_account.owned_by(&crate::ID) {
         return Err(ProgramError::InvalidAccountOwner);
     }
@@ -64,6 +78,55 @@ pub fn verify_did_account(did_account: &AccountView) -> Result<[u8; 32], Program
         return Err(ProgramError::InvalidSeeds);
     }
     Ok(subject)
+}
+
+/// Loads an existing `KeyBuffer`: writable, owned by this program, carrying
+/// the `KeyBuffer` discriminator, bound to `authority` (and to `did_account`
+/// when given), at the PDA ["bio-did-key", did_account, authority] with the
+/// stored bump.
+pub fn verify_key_buffer(
+    key_buffer: &AccountView,
+    authority: &Address,
+    did_account: Option<&Address>,
+) -> Result<(), ProgramError> {
+    if !key_buffer.is_writable() {
+        return Err(ProgramError::Immutable);
+    }
+    if !key_buffer.owned_by(&crate::ID) {
+        return Err(ProgramError::InvalidAccountOwner);
+    }
+    let data = key_buffer.try_borrow()?;
+    if data.len() < KEY_BUFFER_HEADER || data[0..8] != KEY_BUFFER_DISCRIMINATOR {
+        return Err(ProgramError::InvalidAccountData);
+    }
+    let kb = KeyBufferRef::parse(&data)?;
+    require(
+        kb.authority == authority.as_ref(),
+        DidError::InvalidKeyBuffer,
+    )?;
+    if let Some(did) = did_account {
+        require(kb.did_account == did.as_ref(), DidError::InvalidKeyBuffer)?;
+    }
+    let expected = Address::create_program_address(
+        &[KEY_BUFFER_SEED, kb.did_account, kb.authority, &[kb.bump]],
+        &crate::ID,
+    )
+    .map_err(|_| ProgramError::InvalidSeeds)?;
+    if key_buffer.address() != &expected {
+        return Err(ProgramError::InvalidSeeds);
+    }
+    Ok(())
+}
+
+/// Move every lamport to the payer and close the account.
+pub fn close_to(account: &mut AccountView, payer: &mut AccountView) -> Result<(), ProgramError> {
+    let credited = payer
+        .lamports()
+        .checked_add(account.lamports())
+        .ok_or(ProgramError::ArithmeticOverflow)?;
+    payer.set_lamports(credited);
+    account.set_lamports(0);
+    account.close()
 }
 
 /// Rent-exempt minimum for `data_len`, read from the rent sysvar.
