@@ -21,7 +21,7 @@ on-chain account (PDA `["bio-did", subject]`, 124 bytes initially) unlocks:
   verification relationships (authentication, assertionMethod, keyAgreement,
   capabilityInvocation, capabilityDelegation) are stored as bitflags
 - **Post quantum keys** - ML-DSA-87 (FIPS 204) verification methods for
-  long-lived off-chain assertions
+  long-lived off-chain assertions, uploaded in chunks through a key buffer
 - **Services** - e.g. `BioMetadata -> ipfs://<cid>` anchoring research
   metadata, `DataverseRepository -> doi.org/...`
 - **Controllers** - link dataset DIDs to researcher/organization DIDs
@@ -48,12 +48,35 @@ by the [`did-bio-core`](https://github.com/ekayana-labs/did-bio-core)
 resolver crate:
 
 - instruction discriminators: `sha256("global:<name>")[..8]`
-- account discriminator: `sha256("account:DidAccount")[..8]`
+- account discriminators: `sha256("account:DidAccount")[..8]` and
+  `sha256("account:KeyBuffer")[..8]`
 - events (`sha256("event:<Name>")[..8]` + borsh) via `sol_log_data`
-- domain errors as custom program error codes `6000..=6014`
+- domain errors as custom program error codes `6000..=6017`
 
 See the [did:bio method specification](https://github.com/ekayana-labs/did-bio-spec)
 for the account layout, resolution algorithm, and security analysis.
+
+## Large keys
+
+An ML-DSA-87 public key is 2592 bytes and a Solana transaction is at most
+1232, so post quantum keys cannot travel in `add_verification_method`. They
+go through a staging account instead:
+
+1. `create_key_buffer(fragment, type, flags, key_len)` opens a `KeyBuffer`
+   PDA at `["bio-did-key", did_account, authority]`, funded by the payer and
+   bound to the signing authority. Every rule that does not need the key
+   bytes is checked here, so a doomed upload fails before any chunk is sent.
+2. `write_key_buffer(offset, chunk)` appends chunks in order. Chunks of 900
+   bytes keep each transaction under the limit; an ML-DSA-87 key takes three.
+3. `add_verification_method_from_buffer()` re-checks every rule against the
+   DID's current state, appends the method, closes the buffer, and refunds
+   its rent to the payer.
+4. `close_key_buffer()` abandons an upload and refunds its rent.
+
+Only the bound authority can write, finish, or close a buffer, a buffer
+lands only in the DID it was opened for, and one buffer per authority and
+DID exists at a time. The `bio-did-resolver` command line hides the sequence
+behind a single `add-key` invocation.
 
 ## Using the crate
 
@@ -69,12 +92,12 @@ bio-did-registry = { version = "0.1", features = ["no-entrypoint"] }
 the crate links into an ordinary binary or another program. It exports:
 
 - `ID` - the program address
-- `ix` - the eight instruction discriminators
-- `state` - the account discriminator, PDA seed, size limits, verification
-  method type and flag constants, and the `Sections` parser for the account
-  layout
+- `ix` - the twelve instruction discriminators
+- `state` - the account discriminators, PDA seeds, size limits, verification
+  method type and flag constants, the `Sections` parser for the account
+  layout, and the `KeyBufferRef` header parser
 - `events` - the three event discriminators
-- `error::DidError` - the domain errors behind custom codes `6000..=6014`
+- `error::DidError` - the domain errors behind custom codes `6000..=6017`
 
 The crate is `no_std` on the Solana target and a normal library elsewhere.
 
@@ -90,6 +113,7 @@ Core invariants enforced on-chain:
 - `PROTECTED` verification methods only change under their own key
 - a sponsor who pays for `initialize` gains no control over the DID
 - deactivation is permanent (tombstone, never account closure)
+- a key buffer is bound to the authority that opened it and to one DID
 
 ## Building and Verifying
 
@@ -119,14 +143,17 @@ cargo test --test compute_units -- --nocapture   # per-instruction CU report
 ## Compute Units
 
 Baselines measured with the `compute_units` test (rounded to hundreds;
-`initialize` varies with the PDA bump search). The binary is ~75 KB and the
-per edit cost is independent of document size.
+`initialize` and `create_key_buffer` vary with the PDA bump search). The
+binary is ~92 KB and the per edit cost is independent of document size.
 
 | Instruction | Estimated Cost |
 | --- | --- |
 | `initialize` | 3600+ |
 | `add_verification_method` (Ed25519) | 4900 |
-| `add_verification_method` (ML-DSA-87, 2.5 KB key) | 4800 |
+| `create_key_buffer` (ML-DSA-87, 2.5 KB) | 5600+ |
+| `write_key_buffer` (900 B chunk) | 1900 |
+| `add_verification_method_from_buffer` (2.5 KB key) | 6600 |
+| `close_key_buffer` | 1800 |
 | `remove_verification_method` | 3500 |
 | `set_verification_method_flags` | 3100 |
 | `add_service` | 5900 |
