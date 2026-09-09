@@ -1,0 +1,43 @@
+# cargo-deny policy: security advisories, licenses, duplicate versions and
+# dependency sources. CI runs it on every push; locally: `cargo deny check`.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+# Vulnerabilities anywhere in the tree fail the check. Unmaintained crates
+# only fail when they are direct dependencies; the Solana test stack pulls
+# several transitively that nobody downstream can replace.
+unmaintained = "workspace"
+ignore = []
+
+[licenses]
+version = 2
+allow = [
+  "MIT",
+  "MIT-0",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "0BSD",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "Unlicense",
+  "CC0-1.0",
+  "OpenSSL",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "warn"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
