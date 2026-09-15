@@ -1728,3 +1728,292 @@ fn test_key_buffer_protected_requires_own_key() {
     assert_eq!(did.verification_methods[1].flags, flags);
     assert_eq!(did.verification_methods[1].key_data, s.to_bytes());
 }
+
+// ---------------------------------------------------------------------------
+// Owned DIDs: program-derived subjects controlled by their creator
+// ---------------------------------------------------------------------------
+
+const IX_INITIALIZE_OWNED: [u8; 8] = [51, 133, 240, 229, 41, 137, 108, 91];
+
+/// The subject `initialize_owned(nonce)` derives for `authority`: an
+/// off-curve program address, computed here independently of the crate.
+fn owned_subject(authority: &Pubkey, nonce: u64) -> Pubkey {
+    Pubkey::find_program_address(
+        &[b"bio-did-owned", authority.as_ref(), &nonce.to_le_bytes()],
+        &program_id(),
+    )
+    .0
+}
+
+fn initialize_owned_ix(payer: &Pubkey, authority: &Pubkey, nonce: u64) -> Instruction {
+    let mut data = IX_INITIALIZE_OWNED.to_vec();
+    data.extend_from_slice(&nonce.to_le_bytes());
+    Instruction {
+        program_id: program_id(),
+        accounts: mutate_metas(payer, authority, &owned_subject(authority, nonce)),
+        data,
+    }
+}
+
+/// Sends several instructions in one transaction with one fee payer.
+fn send_all(svm: &mut LiteSVM, ixs: &[Instruction], payer: &Keypair) -> Result<(), String> {
+    svm.expire_blockhash();
+    let blockhash = svm.latest_blockhash();
+    let msg = Message::new_with_blockhash(ixs, Some(&payer.pubkey()), &blockhash);
+    let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[payer])
+        .map_err(|e| e.to_string())?;
+    svm.send_transaction(tx)
+        .map(|_| ())
+        .map_err(|e| format!("{:?} logs: {:?}", e.err, e.meta.logs))
+}
+
+#[test]
+fn test_initialize_owned_creates_a_did_controlled_by_its_authority() {
+    let mut svm = setup();
+    let wallet = Keypair::new();
+    svm.airdrop(&wallet.pubkey(), AIRDROP).unwrap();
+    let nonce = 7u64;
+    let subject = owned_subject(&wallet.pubkey(), nonce);
+    assert!(
+        !subject.is_on_curve(),
+        "an owned subject is a program address, never a key"
+    );
+    let pda = did_pda(&subject);
+
+    let meta = send_meta(
+        &mut svm,
+        initialize_owned_ix(&wallet.pubkey(), &wallet.pubkey(), nonce),
+        &wallet,
+        &[],
+    )
+    .unwrap();
+
+    // The event names the derived subject, so indexers can build the DID.
+    {
+        use base64::Engine;
+        let payload = meta
+            .logs
+            .iter()
+            .find_map(|l| l.strip_prefix("Program data: "))
+            .expect("expected a `Program data:` event log");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(payload)
+            .unwrap();
+        assert_eq!(bytes[0..8], [125, 40, 26, 220, 241, 180, 151, 84]); // DidInitialized
+        assert_eq!(bytes[8..40], pda.to_bytes());
+        assert_eq!(bytes[40..72], subject.to_bytes());
+        assert_eq!(bytes[72..80], 1u64.to_le_bytes());
+    }
+
+    let did = decode(&svm, &pda);
+    assert_eq!(did.version, 1);
+    assert_eq!(did.subject, subject.to_bytes());
+    assert!(!did.deactivated);
+    assert_eq!(did.verification_methods.len(), 1);
+    let vm = &did.verification_methods[0];
+    assert_eq!(vm.fragment, "default");
+    assert_eq!(vm.method_type, VM_TYPE_ED25519);
+    assert_eq!(vm.flags, VM_FLAGS_DEFAULT);
+    assert_eq!(
+        vm.key_data,
+        wallet.pubkey().to_bytes().to_vec(),
+        "the authority's key is the only method"
+    );
+    assert!(did.services.is_empty());
+
+    // Same layout as a key-subject document, except for the two keys.
+    let account = svm.get_account(&pda).unwrap();
+    assert_eq!(account.data.len(), INITIAL_SPACE);
+    let bump = Pubkey::find_program_address(&[b"bio-did", subject.as_ref()], &program_id()).1;
+    let mut expected = Vec::with_capacity(INITIAL_SPACE);
+    expected.extend_from_slice(&ACCOUNT_DISCRIMINATOR);
+    expected.extend_from_slice(&1u64.to_le_bytes());
+    expected.push(bump);
+    expected.extend_from_slice(subject.as_ref());
+    expected.push(0);
+    expected.extend_from_slice(&account.data[50..58]);
+    expected.extend_from_slice(&0u32.to_le_bytes());
+    expected.extend_from_slice(&0u32.to_le_bytes());
+    expected.extend_from_slice(&1u32.to_le_bytes());
+    expected.extend_from_slice(&7u32.to_le_bytes());
+    expected.extend_from_slice(b"default");
+    expected.push(VM_TYPE_ED25519);
+    expected.extend_from_slice(&VM_FLAGS_DEFAULT.to_le_bytes());
+    expected.extend_from_slice(&32u32.to_le_bytes());
+    expected.extend_from_slice(wallet.pubkey().as_ref());
+    expected.extend_from_slice(&0u32.to_le_bytes());
+    assert_eq!(account.data, expected, "owned account bytes");
+
+    // The address is taken: neither path may create it again.
+    assert!(send(
+        &mut svm,
+        initialize_owned_ix(&wallet.pubkey(), &wallet.pubkey(), nonce),
+        &wallet,
+        &[],
+    )
+    .is_err());
+    assert!(send(
+        &mut svm,
+        initialize_ix(&wallet.pubkey(), &subject),
+        &wallet,
+        &[],
+    )
+    .is_err());
+
+    // Another nonce is another DID.
+    let other = owned_subject(&wallet.pubkey(), nonce + 1);
+    assert_ne!(other, subject);
+    send(
+        &mut svm,
+        initialize_owned_ix(&wallet.pubkey(), &wallet.pubkey(), nonce + 1),
+        &wallet,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(decode(&svm, &did_pda(&other)).subject, other.to_bytes());
+}
+
+#[test]
+fn test_initialize_owned_requires_the_authority_and_grants_the_payer_nothing() {
+    let mut svm = setup();
+    let sponsor = Keypair::new();
+    let wallet = Keypair::new();
+    svm.airdrop(&sponsor.pubkey(), AIRDROP).unwrap();
+    svm.airdrop(&wallet.pubkey(), AIRDROP).unwrap();
+    let nonce = 1u64;
+    let subject = owned_subject(&wallet.pubkey(), nonce);
+
+    // The authority's signature is not optional.
+    let mut unsigned = initialize_owned_ix(&sponsor.pubkey(), &wallet.pubkey(), nonce);
+    unsigned.accounts[1] = AccountMeta::new_readonly(wallet.pubkey(), false);
+    let err = send(&mut svm, unsigned, &sponsor, &[]).unwrap_err();
+    assert!(
+        err.contains("MissingRequiredSignature"),
+        "unsigned authority: {err}"
+    );
+
+    // A DID account handed in for a different (authority, nonce) is refused.
+    let mut wrong = initialize_owned_ix(&sponsor.pubkey(), &wallet.pubkey(), nonce);
+    wrong.accounts[2] = AccountMeta::new(did_pda(&owned_subject(&sponsor.pubkey(), nonce)), false);
+    let err = send(&mut svm, wrong, &sponsor, &[&wallet]).unwrap_err();
+    assert!(err.contains("InvalidSeeds"), "foreign account: {err}");
+
+    // Sponsored creation: the sponsor pays, the wallet signs and controls.
+    send(
+        &mut svm,
+        initialize_owned_ix(&sponsor.pubkey(), &wallet.pubkey(), nonce),
+        &sponsor,
+        &[&wallet],
+    )
+    .unwrap();
+    let did = decode(&svm, &did_pda(&subject));
+    assert_eq!(
+        did.verification_methods[0].key_data,
+        wallet.pubkey().to_bytes().to_vec()
+    );
+
+    let s = sponsor.pubkey();
+    assert_custom_err(
+        send(
+            &mut svm,
+            add_service_ix(&s, &s, &subject, "metadata", "BioMetadata", "ipfs://x"),
+            &sponsor,
+            &[],
+        ),
+        6000,
+        "Unauthorized",
+    );
+    let w = wallet.pubkey();
+    send(
+        &mut svm,
+        add_service_ix(&w, &w, &subject, "metadata", "BioMetadata", "ipfs://x"),
+        &wallet,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(decode(&svm, &did_pda(&subject)).services.len(), 1);
+}
+
+#[test]
+fn test_owned_did_lifecycle_paid_by_its_wallet() {
+    let mut svm = setup();
+    let wallet = Keypair::new();
+    svm.airdrop(&wallet.pubkey(), AIRDROP).unwrap();
+    let w = wallet.pubkey();
+    let nonce = u64::MAX;
+    let subject = owned_subject(&w, nonce);
+    let pda = did_pda(&subject);
+
+    // Creation, the metadata pointer and the controller link travel in one
+    // transaction with one signature, well under the packet limit.
+    let ixs = [
+        initialize_owned_ix(&w, &w, nonce),
+        add_service_ix(
+            &w,
+            &w,
+            &subject,
+            "metadata",
+            "BioMetadata",
+            "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+        ),
+        set_controllers_ix(&w, &w, &subject, &[w], &[]),
+    ];
+    let msg = Message::new_with_blockhash(&ixs, Some(&w), &svm.latest_blockhash());
+    assert!(1 + 64 + msg.serialize().len() <= PACKET_DATA_SIZE);
+    let before = svm.get_balance(&w).unwrap();
+    send_all(&mut svm, &ixs, &wallet).unwrap();
+    let did = decode(&svm, &pda);
+    assert_eq!(did.version, 3);
+    assert_eq!(did.services[0].fragment, "metadata");
+    assert_eq!(did.native_controllers, vec![w.to_bytes()]);
+    let rent = svm.get_balance(&pda).unwrap();
+    assert!(
+        before - svm.get_balance(&w).unwrap() >= rent,
+        "the wallet funded the account"
+    );
+
+    // Key rotation from the wallet: a new authority in, the protected
+    // default out (signed by its own key), then the old key is powerless.
+    let next = Keypair::new();
+    svm.airdrop(&next.pubkey(), AIRDROP).unwrap();
+    send(
+        &mut svm,
+        add_vm_ix(
+            &w,
+            &w,
+            &subject,
+            "next",
+            VM_TYPE_ED25519,
+            VM_FLAG_AUTHENTICATION | VM_FLAG_CAPABILITY_INVOCATION,
+            next.pubkey().as_ref(),
+        ),
+        &wallet,
+        &[],
+    )
+    .unwrap();
+    send(
+        &mut svm,
+        remove_vm_ix(&w, &w, &subject, "default"),
+        &wallet,
+        &[],
+    )
+    .unwrap();
+    assert_custom_err(
+        send(&mut svm, deactivate_ix(&w, &w, &subject), &wallet, &[]),
+        6000,
+        "Unauthorized after rotation",
+    );
+
+    // Deactivation by the new authority refunds the rent to its payer.
+    let n = next.pubkey();
+    let before = svm.get_balance(&n).unwrap();
+    send(&mut svm, deactivate_ix(&n, &n, &subject), &next, &[]).unwrap();
+    let after = svm.get_balance(&n).unwrap();
+    assert_eq!(account_len(&svm, &pda), TOMBSTONE_SPACE);
+    assert!(decode(&svm, &pda).deactivated);
+    assert!(
+        after > before,
+        "shrinking to the tombstone refunds the payer"
+    );
+    assert!(send(&mut svm, initialize_owned_ix(&w, &w, nonce), &wallet, &[],).is_err());
+}

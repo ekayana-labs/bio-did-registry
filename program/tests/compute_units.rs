@@ -131,6 +131,27 @@ impl World {
         self.send_accounts(data, accounts)
     }
 
+    /// `initialize_owned` for a second DID whose subject the program
+    /// derives from this world's signer and `nonce`.
+    fn send_initialize_owned(&mut self, nonce: u64) -> u64 {
+        let s = self.subject.pubkey();
+        let subject = Pubkey::find_program_address(
+            &[b"bio-did-owned", s.as_ref(), &nonce.to_le_bytes()],
+            &program_id(),
+        )
+        .0;
+        let pda = Pubkey::find_program_address(&[b"bio-did", subject.as_ref()], &program_id()).0;
+        let mut data = [51u8, 133, 240, 229, 41, 137, 108, 91].to_vec();
+        data.extend_from_slice(&nonce.to_le_bytes());
+        let accounts = vec![
+            AccountMeta::new(s, true),
+            AccountMeta::new_readonly(s, true),
+            AccountMeta::new(pda, false),
+            AccountMeta::new_readonly(system_program(), false),
+        ];
+        self.send_accounts(data, accounts)
+    }
+
     fn create_key_buffer(&mut self, fragment: &str) -> u64 {
         let mut data = [138u8, 70, 101, 189, 154, 98, 203, 23].to_vec();
         put_str(&mut data, fragment);
@@ -164,6 +185,10 @@ fn lifecycle_compute_unit_report() {
     type Step<'a> = (&'a str, Box<dyn Fn(&mut World) -> u64>);
     let steps: Vec<Step> = vec![
         ("initialize", Box::new(|w: &mut World| w.send_initialize())),
+        (
+            "initialize_owned (derived subject)",
+            Box::new(|w: &mut World| w.send_initialize_owned(1)),
+        ),
         (
             "add_verification_method (Ed25519)",
             Box::new(move |w: &mut World| {
