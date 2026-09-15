@@ -403,7 +403,7 @@ dependencies = [
 
 [[package]]
 name = "bio-did-registry"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64",
  "five8_const",

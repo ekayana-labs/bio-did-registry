@@ -42,6 +42,12 @@ carrying the `capabilityInvocation` relationship. `initialize` is
 permissionless, so a platform can sponsor account creation while the subject
 keeps sole control: the created state is exactly the generative document.
 
+A DID does not have to be a key. `initialize_owned(nonce)` derives the
+subject from the signing authority (`["bio-did-owned", authority, nonce]`,
+an off-curve program address) and makes that authority's key the document's
+first verification method, so a wallet names a dataset, paper or claim it
+owns, pays for and controls with one signature. See [Owned DIDs](#owned-dids).
+
 The program is built with [Pinocchio](https://github.com/anza-xyz/pinocchio):
 `no_std`, allocation-free (`no_allocator!`), with account data edited in
 place - a document holding sixteen 2.5 KB post-quantum keys costs the same
@@ -87,6 +93,27 @@ lands only in the DID it was opened for, and one buffer per authority and
 DID exists at a time. The `bio-did-resolver` command line hides the sequence
 behind a single `add-key` invocation.
 
+## Owned DIDs
+
+Research assets need identifiers of their own, but a fresh keypair per
+asset means someone has to keep that key. An owned DID has no key:
+
+```text
+subject     = find_program_address(["bio-did-owned", authority, nonce_le], PROGRAM_ID)
+did_account = find_program_address(["bio-did", subject], PROGRAM_ID)
+```
+
+`initialize_owned(nonce)` takes `[payer, authority, did_account,
+system_program]`, requires the authority's signature, and writes the same
+124-byte initial document as `initialize` with the authority's key as the
+protected `#default` method. From then on the DID behaves like any other:
+services, controllers, key rotation, post-quantum keys, deactivation. The
+subject is off the curve, so no generative document exists for it and it
+resolves only through the registry (`notFound` until the account is
+created, `deactivated` forever after a tombstone). Because the authority
+must sign, nobody can register an owned DID in another wallet's name, and
+the same nonce under two authorities yields two unrelated DIDs.
+
 ## Using the crate
 
 The program is published to [crates.io](https://crates.io/crates/bio-did-registry)
@@ -101,10 +128,11 @@ bio-did-registry = { version = "0.1", features = ["no-entrypoint"] }
 the crate links into an ordinary binary or another program. It exports:
 
 - `ID` - the program address
-- `ix` - the twelve instruction discriminators
+- `ix` - the thirteen instruction discriminators
 - `state` - the account discriminators, PDA seeds, size limits, verification
   method type and flag constants, the `Sections` parser for the account
-  layout, and the `KeyBufferRef` header parser
+  layout, the `KeyBufferRef` header parser, and `owned_subject` for the
+  subject an `initialize_owned` creates
 - `events` - the three event discriminators
 - `error::DidError` - the domain errors behind custom codes `6000..=6017`
 
@@ -121,6 +149,7 @@ Core invariants enforced on-chain:
 - the last update authority can never be removed or de-flagged
 - `PROTECTED` verification methods only change under their own key
 - a sponsor who pays for `initialize` gains no control over the DID
+- an owned DID is created only under its authority's signature
 - deactivation is permanent (tombstone, never account closure)
 - a key buffer is bound to the authority that opened it and to one DID
 
@@ -146,18 +175,19 @@ parser, so the tests pin the wire format itself:
 ```console
 cargo build-sbf --manifest-path program/Cargo.toml
 cargo test
-cargo test --test compute_units -- --nocapture   # per-instruction CU report
+cargo test --test compute_units -- --nocapture
 ```
 
 ## Compute Units
 
 Baselines measured with the `compute_units` test (rounded to hundreds;
 `initialize` and `create_key_buffer` vary with the PDA bump search). The
-binary is ~92 KB and the per edit cost is independent of document size.
+binary is ~93 KB and the per edit cost is independent of document size.
 
 | Instruction | Estimated Cost |
 | --- | --- |
 | `initialize` | 3600+ |
+| `initialize_owned` | 5200+ |
 | `add_verification_method` (Ed25519) | 4900 |
 | `create_key_buffer` (ML-DSA-87, 2.5 KB) | 5600+ |
 | `write_key_buffer` (900 B chunk) | 1900 |
