@@ -7,6 +7,7 @@ pub mod close_key_buffer;
 pub mod create_key_buffer;
 pub mod deactivate;
 pub mod initialize;
+pub mod initialize_owned;
 pub mod remove_service;
 pub mod remove_verification_method;
 pub mod set_controllers;

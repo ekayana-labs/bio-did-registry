@@ -36,6 +36,29 @@ pub const ACCOUNT_DISCRIMINATOR: [u8; 8] = [77, 88, 239, 141, 251, 29, 237, 243]
 /// PDA seed prefix: ["bio-did", subject].
 pub const DID_SEED: &[u8] = b"bio-did";
 
+/// Seed prefix of a program-derived ("owned") subject:
+/// `find_program_address(["bio-did-owned", authority, nonce_le])`.
+pub const OWNED_SUBJECT_SEED: &[u8] = b"bio-did-owned";
+
+/// The seeds of the owned subject for `authority` and `nonce`, in the order
+/// `find_program_address` expects them.
+#[inline(always)]
+pub fn owned_subject_seeds<'a>(authority: &'a [u8; 32], nonce: &'a [u8; 8]) -> [&'a [u8]; 3] {
+    [OWNED_SUBJECT_SEED, authority, nonce]
+}
+
+/// The owned subject that `initialize_owned(nonce)` signed by `authority`
+/// creates: an off-curve address, so the DID resolves only through the
+/// registry.
+pub fn owned_subject(authority: &[u8; 32], nonce: u64) -> [u8; 32] {
+    let nonce = nonce.to_le_bytes();
+    let (subject, _) = pinocchio::Address::find_program_address(
+        &owned_subject_seeds(authority, &nonce),
+        &crate::ID,
+    );
+    *subject.as_array()
+}
+
 /// Reserved fragment for the subject's initial verification method.
 pub const DEFAULT_FRAGMENT: &[u8] = b"default";
 
@@ -505,4 +528,25 @@ pub fn touch(data: &mut [u8], now: i64) {
 #[inline]
 pub fn version(data: &[u8]) -> u64 {
     u64::from_le_bytes(data[OFF_VERSION..OFF_VERSION + 8].try_into().unwrap())
+}
+
+#[cfg(test)]
+mod owned_subject_tests {
+    use super::*;
+
+    /// Pinned across the resolver crate and the backend: the same inputs
+    /// derive the same subject everywhere, and it is never a key.
+    #[test]
+    fn owned_subject_golden_vector() {
+        let authority = [0x11u8; 32];
+        assert_eq!(
+            owned_subject(&authority, 42),
+            [
+                176, 5, 37, 51, 53, 114, 109, 56, 180, 140, 48, 89, 115, 119, 13, 138, 192, 54,
+                110, 20, 205, 247, 212, 197, 39, 52, 9, 159, 203, 10, 250, 28
+            ]
+        );
+        assert_ne!(owned_subject(&authority, 43), owned_subject(&authority, 42));
+        assert!(!pinocchio::Address::new_from_array(owned_subject(&authority, 42)).is_on_curve());
+    }
 }
