@@ -13,10 +13,11 @@ use pinocchio::{
 
 use crate::{error::*, events, instructions::shared::*, state::*};
 
-pub fn process(accounts: &mut [AccountView], _args: &[u8]) -> ProgramResult {
+pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let [payer, authority, did_account, key_buffer, system_program, ..] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
+    ix_finish(args, 0)?;
     check_payer(payer)?;
     check_authority_signer(authority)?;
     check_system_program(system_program)?;
@@ -24,39 +25,45 @@ pub fn process(accounts: &mut [AccountView], _args: &[u8]) -> ProgramResult {
     verify_key_buffer(key_buffer, authority.address(), Some(did_account.address()))?;
     let signer_key: &[u8] = authority.address().as_ref();
 
-    // Header scalars and the fragment, copied out so the validation below
-    // can borrow both accounts freely.
+    // The header scalars and the fragment are copied out, since the write
+    // below needs the DID account mutably while the key is read from the
+    // buffer.
     let mut fragment_buf = [0u8; MAX_FRAGMENT_LEN];
-    let (fragment_len, method_type, flags, key_len) = {
+    let (fragment_len, method_type, flags, key_len, insert_at, old_len, vm_count_pos, vm_count) = {
         let buf = key_buffer.try_borrow()?;
         let kb = KeyBufferRef::parse(&buf)?;
         require(kb.written == kb.key_len, DidError::KeyBufferIncomplete)?;
-        fragment_buf[..kb.fragment.len()].copy_from_slice(kb.fragment);
-        (kb.fragment.len(), kb.method_type, kb.flags, kb.key_len)
-    };
-    let fragment = &fragment_buf[..fragment_len];
-    let expected_len = expected_key_len(method_type).ok_or(ProgramError::InvalidInstructionData)?;
-    let entry_len = vm_space(fragment.len(), key_len);
-
-    let (insert_at, old_len, vm_count_pos, vm_count) = {
+        let expected_len =
+            expected_key_len(kb.method_type).ok_or(ProgramError::InvalidInstructionData)?;
+        let key = kb.key(&buf);
         let data = did_account.try_borrow()?;
-        let buf = key_buffer.try_borrow()?;
-        let key = &buf[KB_OFF_KEY..KB_OFF_KEY + key_len];
         let s = Sections::parse(&data)?;
         require_authority(&data, &s, signer_key.try_into().unwrap())?;
         require(
             s.vm_count < MAX_VERIFICATION_METHODS,
             DidError::TooManyVerificationMethods,
         )?;
-        require(valid_fragment(fragment), DidError::InvalidFragment)?;
-        require_fragment_free(&data, &s, fragment)?;
-        require(key_len == expected_len, DidError::InvalidKeyLength)?;
-        validate_vm_flags(method_type, flags)?;
-        if flags & VM_FLAG_PROTECTED != 0 {
+        require(valid_fragment(kb.fragment), DidError::InvalidFragment)?;
+        require_fragment_free(&data, &s, kb.fragment)?;
+        require(kb.key_len == expected_len, DidError::InvalidKeyLength)?;
+        validate_vm_flags(kb.method_type, kb.flags)?;
+        if kb.flags & VM_FLAG_PROTECTED != 0 {
             require(key == signer_key, DidError::ProtectedVerificationMethod)?;
         }
-        (s.svc_count_pos, s.end, s.vm_count_pos, s.vm_count)
+        fragment_buf[..kb.fragment.len()].copy_from_slice(kb.fragment);
+        (
+            kb.fragment.len(),
+            kb.method_type,
+            kb.flags,
+            kb.key_len,
+            s.svc_count_pos,
+            s.end,
+            s.vm_count_pos,
+            s.vm_count,
+        )
     };
+    let fragment = &fragment_buf[..fragment_len];
+    let entry_len = vm_space(fragment.len(), key_len);
 
     grow(did_account, payer, old_len + entry_len)?;
     let now = Clock::get()?.unix_timestamp;

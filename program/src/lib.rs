@@ -17,6 +17,11 @@
 //! chunks into a `KeyBuffer` staging account and appended to the document by
 //! `add_verification_method_from_buffer`; see `state::KeyBufferRef`.
 //!
+//! `initialize_owned` creates a DID whose subject is derived by the program
+//! (`["bio-did-owned", authority, nonce]`, off the curve) and controlled by
+//! the signing authority from its first version: one signature names an
+//! asset its owner pays for. Such a DID has no generative document.
+//!
 //! The wire format (instruction/account/event discriminators, borsh account
 //! layout, error codes 6000..6017) is frozen and pinned by the golden
 //! vectors in this repository's test suite; deployed resolvers and clients
@@ -58,6 +63,8 @@ pub mod ix {
     pub const WRITE_KEY_BUFFER: [u8; 8] = [61, 88, 82, 10, 227, 249, 18, 117];
     pub const ADD_VERIFICATION_METHOD_FROM_BUFFER: [u8; 8] = [111, 184, 129, 9, 216, 207, 122, 90];
     pub const CLOSE_KEY_BUFFER: [u8; 8] = [6, 209, 103, 32, 78, 18, 70, 184];
+    // A DID with a program-derived subject, controlled by its creator.
+    pub const INITIALIZE_OWNED: [u8; 8] = [51, 133, 240, 229, 41, 137, 108, 91];
 }
 
 #[inline]
@@ -94,6 +101,7 @@ pub fn process_instruction(
             instructions::add_verification_method_from_buffer::process(accounts, args)
         }
         ix::CLOSE_KEY_BUFFER => instructions::close_key_buffer::process(accounts, args),
+        ix::INITIALIZE_OWNED => instructions::initialize_owned::process(accounts, args),
         _ => Err(ProgramError::InvalidInstructionData),
     }
 }

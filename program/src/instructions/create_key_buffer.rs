@@ -34,6 +34,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let method_type = ix_read_u8(args, &mut off)?;
     let flags = ix_read_u16(args, &mut off)?;
     let key_len = ix_read_u32(args, &mut off)? as usize;
+    ix_finish(args, off)?;
     let expected_len = expected_key_len(method_type).ok_or(ProgramError::InvalidInstructionData)?;
     let signer_key: &[u8] = authority.address().as_ref();
 
@@ -48,12 +49,9 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         require(valid_fragment(fragment), DidError::InvalidFragment)?;
         require_fragment_free(&data, &s, fragment)?;
         require(key_len == expected_len, DidError::InvalidKeyLength)?;
+        // Protection is Ed25519 only, so a protected upload is always 32
+        // bytes; whether they are the signer's own is settled on finish.
         validate_vm_flags(method_type, flags)?;
-        // A protected method must carry the signer's own 32 byte key, which
-        // a larger key can never satisfy when the buffer is finished.
-        if flags & VM_FLAG_PROTECTED != 0 {
-            require(key_len == 32, DidError::ProtectedVerificationMethod)?;
-        }
     }
 
     let (pda, bump) = Address::find_program_address(

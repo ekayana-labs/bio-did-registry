@@ -13,18 +13,15 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
     check_authority_signer(authority)?;
-    verify_key_buffer(key_buffer, authority.address(), None)?;
+    let (written, key_len) = check_key_buffer(key_buffer, authority.address(), None)?;
 
     // Borsh args: offset: u32, chunk: Vec<u8>
     let mut off = 0usize;
     let offset = ix_read_u32(args, &mut off)? as usize;
     let chunk = ix_read_len_prefixed(args, &mut off)?;
+    ix_finish(args, off)?;
 
     let mut data = key_buffer.try_borrow_mut()?;
-    let (written, key_len) = {
-        let kb = KeyBufferRef::parse(&data)?;
-        (kb.written, kb.key_len)
-    };
     require(
         !chunk.is_empty() && offset == written,
         DidError::InvalidKeyChunk,

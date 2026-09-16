@@ -1,6 +1,6 @@
 [package]
 name = "bio-did-registry"
-version = "0.1.1"
+version = "0.1.2"
 description = "The Solana verifiable data registry backing the did:bio DID method"
 authors.workspace = true
 edition.workspace = true
@@ -30,10 +30,11 @@ five8_const = "1.0.0"
 solana-address = { version = "2", features = ["curve25519"] }
 
 [dev-dependencies]
-# 0.10 pinned: newer litesvm needs a Rust release beyond the pinned toolchain.
-litesvm = "0.10"
-solana-message = "3"
-solana-transaction = "3"
+# The test stack follows litesvm's Solana crate generation; the program
+# itself needs none of it.
+litesvm = "0.16"
+solana-message = "4"
+solana-transaction = "4"
 solana-signer = "3"
 solana-keypair = "3"
 solana-pubkey = "3"

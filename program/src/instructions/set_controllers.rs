@@ -46,6 +46,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
             others[i] = s;
         }
     }
+    ix_finish(args, off)?;
     let new_sections_len = off;
     let signer_key: &[u8] = authority.address().as_ref();
 
@@ -64,13 +65,8 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         }
         for (i, c) in others[..other_count].iter().enumerate() {
             // did:bio controllers must use the native (pubkey) form;
-            // everything else must at least look like a DID.
-            require(
-                valid_uri_ascii(c, MAX_CONTROLLER_LEN)
-                    && c.starts_with(b"did:")
-                    && !c.starts_with(b"did:bio:"),
-                DidError::InvalidController,
-            )?;
+            // everything else must be a DID of some other method.
+            require(valid_external_controller(c), DidError::InvalidController)?;
             require(!others[..i].contains(c), DidError::InvalidController)?;
         }
         (s.end, s.vm_count_pos)

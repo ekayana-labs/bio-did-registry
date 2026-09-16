@@ -2,6 +2,11 @@
 //! consumed per instruction, asserting a generous ceiling per instruction so
 //! CI catches cost regressions.
 //!
+//! The keys are fixed so the numbers are reproducible: every PDA search
+//! (`initialize`, `initialize_owned` twice, `create_key_buffer`) costs
+//! 1500 CU per rejected bump candidate, which would otherwise make the
+//! report, and the ceiling check, vary from run to run.
+//!
 //! Run with output: `cargo test --test compute_units -- --nocapture`
 
 use std::path::PathBuf;
@@ -17,9 +22,15 @@ use solana_transaction::versioned::VersionedTransaction;
 
 const PROGRAM_ID: &str = "H1gnV4GjNT3UV7AgGNUCkSaciuVVtM7hKb8JhPV3Xxy6";
 
-/// Per-instruction ceiling. Measured costs sit at 3-8k CU; a breach of this
+/// Per-instruction ceiling. Measured costs sit at 2-9k CU; a breach of this
 /// bound means something regressed badly.
 const CU_CEILING: u64 = 15_000;
+
+/// Deterministic keys: the subject that signs everything, the rotation key
+/// it adds, and two controller addresses.
+fn fixed_keypair(tag: u8) -> Keypair {
+    Keypair::new_from_array([tag; 32])
+}
 
 /// Largest chunk that keeps a single-signer `write_key_buffer` transaction
 /// under the 1232 byte packet limit.
@@ -53,7 +64,7 @@ impl World {
         .expect("build first: cargo build-sbf --manifest-path program/Cargo.toml");
         let mut svm = LiteSVM::new();
         svm.add_program(program_id(), &so).unwrap();
-        let subject = Keypair::new();
+        let subject = fixed_keypair(1);
         svm.airdrop(&subject.pubkey(), 10_000_000_000).unwrap();
         let pda =
             Pubkey::find_program_address(&[b"bio-did", subject.pubkey().as_ref()], &program_id()).0;
@@ -131,6 +142,27 @@ impl World {
         self.send_accounts(data, accounts)
     }
 
+    /// `initialize_owned` for a second DID whose subject the program
+    /// derives from this world's signer and `nonce`.
+    fn send_initialize_owned(&mut self, nonce: u64) -> u64 {
+        let s = self.subject.pubkey();
+        let subject = Pubkey::find_program_address(
+            &[b"bio-did-owned", s.as_ref(), &nonce.to_le_bytes()],
+            &program_id(),
+        )
+        .0;
+        let pda = Pubkey::find_program_address(&[b"bio-did", subject.as_ref()], &program_id()).0;
+        let mut data = [51u8, 133, 240, 229, 41, 137, 108, 91].to_vec();
+        data.extend_from_slice(&nonce.to_le_bytes());
+        let accounts = vec![
+            AccountMeta::new(s, true),
+            AccountMeta::new_readonly(s, true),
+            AccountMeta::new(pda, false),
+            AccountMeta::new_readonly(system_program(), false),
+        ];
+        self.send_accounts(data, accounts)
+    }
+
     fn create_key_buffer(&mut self, fragment: &str) -> u64 {
         let mut data = [138u8, 70, 101, 189, 154, 98, 203, 23].to_vec();
         put_str(&mut data, fragment);
@@ -156,14 +188,18 @@ impl World {
 
 #[test]
 fn lifecycle_compute_unit_report() {
-    let rotation = Keypair::new();
-    let lab = Keypair::new().pubkey();
-    let lab2 = Keypair::new().pubkey();
+    let rotation = fixed_keypair(2);
+    let lab = fixed_keypair(3).pubkey();
+    let lab2 = fixed_keypair(4).pubkey();
     let mut w = World::new();
 
     type Step<'a> = (&'a str, Box<dyn Fn(&mut World) -> u64>);
     let steps: Vec<Step> = vec![
         ("initialize", Box::new(|w: &mut World| w.send_initialize())),
+        (
+            "initialize_owned (derived subject)",
+            Box::new(|w: &mut World| w.send_initialize_owned(1)),
+        ),
         (
             "add_verification_method (Ed25519)",
             Box::new(move |w: &mut World| {

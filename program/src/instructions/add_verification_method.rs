@@ -24,6 +24,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let method_type = ix_read_u8(args, &mut off)?;
     let flags = ix_read_u16(args, &mut off)?;
     let key_data = ix_read_len_prefixed(args, &mut off)?;
+    ix_finish(args, off)?;
     let expected_len = expected_key_len(method_type).ok_or(ProgramError::InvalidInstructionData)?;
 
     let signer_key: &[u8] = authority.address().as_ref();

@@ -23,6 +23,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let fragment = ix_read_str(args, &mut off)?;
     let service_type = ix_read_str(args, &mut off)?;
     let endpoint = ix_read_str(args, &mut off)?;
+    ix_finish(args, off)?;
     let signer_key: &[u8] = authority.address().as_ref();
     let entry_len = service_space(fragment.len(), service_type.len(), endpoint.len());
 

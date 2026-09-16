@@ -89,6 +89,16 @@ pub fn verify_key_buffer(
     authority: &Address,
     did_account: Option<&Address>,
 ) -> Result<(), ProgramError> {
+    check_key_buffer(key_buffer, authority, did_account).map(|_| ())
+}
+
+/// [`verify_key_buffer`], also returning how far the upload has come:
+/// `(written, key_len)`.
+pub(crate) fn check_key_buffer(
+    key_buffer: &AccountView,
+    authority: &Address,
+    did_account: Option<&Address>,
+) -> Result<(usize, usize), ProgramError> {
     if !key_buffer.is_writable() {
         return Err(ProgramError::Immutable);
     }
@@ -115,7 +125,7 @@ pub fn verify_key_buffer(
     if key_buffer.address() != &expected {
         return Err(ProgramError::InvalidSeeds);
     }
-    Ok(())
+    Ok((kb.written, kb.key_len))
 }
 
 /// Move every lamport to the payer and close the account.
@@ -275,4 +285,15 @@ pub fn ix_read_str<'a>(data: &'a [u8], off: &mut usize) -> Result<&'a [u8], Prog
     let bytes = ix_read_len_prefixed(data, off)?;
     core::str::from_utf8(bytes).map_err(|_| ProgramError::InvalidInstructionData)?;
     Ok(bytes)
+}
+
+/// The arguments end where the last field ends: bytes past it are a
+/// malformed encoding, as they are for borsh's `try_from_slice`.
+#[inline(always)]
+pub fn ix_finish(data: &[u8], off: usize) -> Result<(), ProgramError> {
+    if off == data.len() {
+        Ok(())
+    } else {
+        Err(ProgramError::InvalidInstructionData)
+    }
 }

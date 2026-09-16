@@ -36,7 +36,32 @@ pub const ACCOUNT_DISCRIMINATOR: [u8; 8] = [77, 88, 239, 141, 251, 29, 237, 243]
 /// PDA seed prefix: ["bio-did", subject].
 pub const DID_SEED: &[u8] = b"bio-did";
 
-/// Reserved fragment for the subject's initial verification method.
+/// Seed prefix of a program-derived ("owned") subject:
+/// `find_program_address(["bio-did-owned", authority, nonce_le])`.
+pub const OWNED_SUBJECT_SEED: &[u8] = b"bio-did-owned";
+
+/// The seeds of the owned subject for `authority` and `nonce`, in the order
+/// `find_program_address` expects them.
+#[inline(always)]
+pub fn owned_subject_seeds<'a>(authority: &'a [u8; 32], nonce: &'a [u8; 8]) -> [&'a [u8]; 3] {
+    [OWNED_SUBJECT_SEED, authority, nonce]
+}
+
+/// The owned subject that `initialize_owned(nonce)` signed by `authority`
+/// creates: an off-curve address, so the DID resolves only through the
+/// registry.
+pub fn owned_subject(authority: &[u8; 32], nonce: u64) -> [u8; 32] {
+    let nonce = nonce.to_le_bytes();
+    let (subject, _) = pinocchio::Address::find_program_address(
+        &owned_subject_seeds(authority, &nonce),
+        &crate::ID,
+    );
+    *subject.as_array()
+}
+
+/// The fragment of the founding verification method, written by
+/// `initialize` and `initialize_owned` and never accepted from an
+/// instruction: once that method is gone, `#default` stays gone.
 pub const DEFAULT_FRAGMENT: &[u8] = b"default";
 
 pub const MAX_VERIFICATION_METHODS: usize = 16;
@@ -47,6 +72,10 @@ pub const MAX_FRAGMENT_LEN: usize = 32;
 pub const MAX_SERVICE_TYPE_LEN: usize = 64;
 pub const MAX_ENDPOINT_LEN: usize = 512;
 pub const MAX_CONTROLLER_LEN: usize = 128;
+#[deprecated(
+    since = "0.1.2",
+    note = "the program never reads it; key lengths are fixed per type by expected_key_len"
+)]
 pub const MAX_KEY_DATA_LEN: usize = 2592;
 
 // Verification relationship / property bitflags (low five bits mirror the
@@ -269,13 +298,16 @@ pub struct Sections {
     pub svc_count: usize,
     pub svc_count_pos: usize,
     pub svc_items: usize,
-    /// Total serialized size (== account data length for a healthy account).
+    /// Total serialized size; always equal to the account data length, since
+    /// [`Sections::parse`] rejects anything shorter or longer.
     pub end: usize,
 }
 
 impl Sections {
-    /// Walk the vector sections. Expects `data` to start at the account
-    /// discriminator; the discriminator itself is checked by the caller.
+    /// Walk the vector sections. Expects `data` to be the whole account
+    /// data, starting at the discriminator (which the caller has checked):
+    /// the layout must account for every byte, so handlers can treat `end`
+    /// as the account length when they move the tail.
     pub fn parse(data: &[u8]) -> Result<Self, ProgramError> {
         let mut off = OFF_SECTIONS;
 
@@ -306,6 +338,9 @@ impl Sections {
             read_len_prefixed(data, &mut off)?; // fragment
             read_len_prefixed(data, &mut off)?; // service_type
             read_len_prefixed(data, &mut off)?; // endpoint
+        }
+        if off != data.len() {
+            return Err(ProgramError::InvalidAccountData);
         }
 
         Ok(Self {
@@ -435,7 +470,8 @@ pub fn authority_count(data: &[u8], s: &Sections) -> Result<usize, ProgramError>
     Ok(n)
 }
 
-/// Fragments are unique across verification methods AND services.
+/// Fragments are unique across verification methods AND services, and
+/// `#default` belongs to the founding method alone.
 pub fn require_fragment_free(
     data: &[u8],
     s: &Sections,
@@ -458,16 +494,19 @@ pub fn require_fragment_free(
             Ok(true)
         })?;
     }
-    require(!taken, DidError::FragmentAlreadyInUse)
+    require(!taken, DidError::FragmentAlreadyInUse)?;
+    require(fragment != DEFAULT_FRAGMENT, DidError::InvalidFragment)
 }
 
 /// Flag sanity per key type:
 /// - only known bits may be set;
 /// - capabilityInvocation implies on-chain signing, so Ed25519 only;
+/// - protection is proven by the method's own key signing a transaction,
+///   so it is Ed25519 only as well;
 /// - X25519 is a key-agreement key and cannot sign anything.
 pub fn validate_vm_flags(method_type: u8, flags: u16) -> Result<(), ProgramError> {
     require(flags & !VM_VALID_MASK == 0, DidError::InvalidFlags)?;
-    if flags & VM_FLAG_CAPABILITY_INVOCATION != 0 {
+    if flags & (VM_FLAG_CAPABILITY_INVOCATION | VM_FLAG_PROTECTED) != 0 {
         require(method_type == VM_TYPE_ED25519, DidError::InvalidFlags)?;
     }
     if method_type == VM_TYPE_X25519 {
@@ -493,6 +532,29 @@ pub fn valid_uri_ascii(value: &[u8], max_len: usize) -> bool {
     !value.is_empty() && value.len() <= max_len && value.iter().all(|&b| (0x21..=0x7e).contains(&b))
 }
 
+/// An external controller is a DID of another method, `did:<method>:<id>`
+/// as the DID syntax defines it: a lowercase alphanumeric method name and
+/// a non-empty method-specific id, in printable ASCII of bounded length.
+/// did:bio controllers use the native (key) form instead.
+pub fn valid_external_controller(value: &[u8]) -> bool {
+    if !valid_uri_ascii(value, MAX_CONTROLLER_LEN) {
+        return false;
+    }
+    let Some(rest) = value.strip_prefix(b"did:") else {
+        return false;
+    };
+    let Some(colon) = rest.iter().position(|&b| b == b':') else {
+        return false;
+    };
+    let (method, id) = (&rest[..colon], &rest[colon + 1..]);
+    !method.is_empty()
+        && method != b"bio"
+        && method
+            .iter()
+            .all(|&b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        && !id.is_empty()
+}
+
 /// Bump `version` (saturating) and stamp `updated_at`.
 #[inline]
 pub fn touch(data: &mut [u8], now: i64) {
@@ -505,4 +567,25 @@ pub fn touch(data: &mut [u8], now: i64) {
 #[inline]
 pub fn version(data: &[u8]) -> u64 {
     u64::from_le_bytes(data[OFF_VERSION..OFF_VERSION + 8].try_into().unwrap())
+}
+
+#[cfg(test)]
+mod owned_subject_tests {
+    use super::*;
+
+    /// Pinned across the resolver crate and the backend: the same inputs
+    /// derive the same subject everywhere, and it is never a key.
+    #[test]
+    fn owned_subject_golden_vector() {
+        let authority = [0x11u8; 32];
+        assert_eq!(
+            owned_subject(&authority, 42),
+            [
+                176, 5, 37, 51, 53, 114, 109, 56, 180, 140, 48, 89, 115, 119, 13, 138, 192, 54,
+                110, 20, 205, 247, 212, 197, 39, 52, 9, 159, 203, 10, 250, 28
+            ]
+        );
+        assert_ne!(owned_subject(&authority, 43), owned_subject(&authority, 42));
+        assert!(!pinocchio::Address::new_from_array(owned_subject(&authority, 42)).is_on_curve());
+    }
 }
