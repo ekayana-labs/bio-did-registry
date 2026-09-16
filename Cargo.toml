@@ -2,6 +2,9 @@
 members = ["program"]
 resolver = "2"
 
+[workspace.metadata.cli]
+solana = "3.1.10"
+
 [workspace.package]
 authors = ["Ekayana Labs"]
 edition = "2021"
