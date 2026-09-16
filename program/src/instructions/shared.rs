@@ -276,3 +276,14 @@ pub fn ix_read_str<'a>(data: &'a [u8], off: &mut usize) -> Result<&'a [u8], Prog
     core::str::from_utf8(bytes).map_err(|_| ProgramError::InvalidInstructionData)?;
     Ok(bytes)
 }
+
+/// The arguments end where the last field ends: bytes past it are a
+/// malformed encoding, as they are for borsh's `try_from_slice`.
+#[inline(always)]
+pub fn ix_finish(data: &[u8], off: usize) -> Result<(), ProgramError> {
+    if off == data.len() {
+        Ok(())
+    } else {
+        Err(ProgramError::InvalidInstructionData)
+    }
+}

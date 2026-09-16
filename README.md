@@ -70,6 +70,8 @@ resolver crate:
   `sha256("account:KeyBuffer")[..8]`
 - events (`sha256("event:<Name>")[..8]` + borsh) via `sol_log_data`
 - domain errors as custom program error codes `6000..=6017`
+- instruction arguments are exact: bytes past the last field are rejected
+  as `InvalidInstructionData`, the way borsh's `try_from_slice` rejects them
 
 See the [did:bio method specification](https://github.com/ekayana-labs/did-bio-spec)
 for the account layout, resolution algorithm, and security analysis.

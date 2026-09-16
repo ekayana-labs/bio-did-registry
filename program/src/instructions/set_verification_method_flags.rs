@@ -19,6 +19,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let mut off = 0usize;
     let fragment = ix_read_str(args, &mut off)?;
     let new_flags = ix_read_u16(args, &mut off)?;
+    ix_finish(args, off)?;
     let signer_key: &[u8] = authority.address().as_ref();
 
     let now = Clock::get()?.unix_timestamp;

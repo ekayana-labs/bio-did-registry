@@ -13,10 +13,11 @@ use pinocchio::{
 
 use crate::{error::*, events, instructions::shared::*, state::*};
 
-pub fn process(accounts: &mut [AccountView], _args: &[u8]) -> ProgramResult {
+pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let [payer, authority, did_account, key_buffer, system_program, ..] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
+    ix_finish(args, 0)?;
     check_payer(payer)?;
     check_authority_signer(authority)?;
     check_system_program(system_program)?;

@@ -494,6 +494,66 @@ fn test_initialize_refuses_subjects_that_are_not_keys() {
 }
 
 #[test]
+fn test_trailing_instruction_bytes_are_rejected() {
+    let mut svm = setup();
+    let subject = Keypair::new();
+    svm.airdrop(&subject.pubkey(), AIRDROP).unwrap();
+    let s = subject.pubkey();
+    let padded = |mut ix: Instruction| {
+        ix.data.push(0);
+        ix
+    };
+    let expect_malformed = |res: Result<(), String>, what: &str| {
+        let err = res.expect_err(what);
+        assert!(err.contains("InvalidInstructionData"), "{what}: {err}");
+    };
+
+    expect_malformed(
+        send(&mut svm, padded(initialize_ix(&s, &s)), &subject, &[]),
+        "initialize with 33 bytes",
+    );
+    expect_malformed(
+        send(
+            &mut svm,
+            padded(initialize_owned_ix(&s, &s, 1)),
+            &subject,
+            &[],
+        ),
+        "initialize_owned with 9 bytes",
+    );
+    send(&mut svm, initialize_ix(&s, &s), &subject, &[]).unwrap();
+    expect_malformed(
+        send(
+            &mut svm,
+            padded(add_service_ix(
+                &s,
+                &s,
+                &s,
+                "meta",
+                "BioMetadata",
+                "ipfs://x",
+            )),
+            &subject,
+            &[],
+        ),
+        "add_service with a trailing byte",
+    );
+    expect_malformed(
+        send(&mut svm, padded(deactivate_ix(&s, &s, &s)), &subject, &[]),
+        "deactivate with arguments",
+    );
+    // The well-formed encodings still go through.
+    send(
+        &mut svm,
+        add_service_ix(&s, &s, &s, "meta", "BioMetadata", "ipfs://x"),
+        &subject,
+        &[],
+    )
+    .unwrap();
+    assert!(!decode(&svm, &did_pda(&s)).deactivated);
+}
+
+#[test]
 fn test_sponsored_initialize_grants_no_control_to_payer() {
     let mut svm = setup();
     let sponsor = Keypair::new();

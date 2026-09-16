@@ -19,6 +19,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let mut off = 0usize;
     let offset = ix_read_u32(args, &mut off)? as usize;
     let chunk = ix_read_len_prefixed(args, &mut off)?;
+    ix_finish(args, off)?;
 
     let mut data = key_buffer.try_borrow_mut()?;
     let (written, key_len) = {

@@ -20,6 +20,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
 
     let mut off = 0usize;
     let fragment = ix_read_str(args, &mut off)?;
+    ix_finish(args, off)?;
     let signer_key: &[u8] = authority.address().as_ref();
 
     let (span_start, span_end, old_len, svc_count_pos, svc_count) = {

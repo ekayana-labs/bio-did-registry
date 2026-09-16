@@ -23,10 +23,8 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     };
     check_authority_signer(authority)?;
     let nonce: [u8; 8] = args
-        .get(0..8)
-        .ok_or(ProgramError::InvalidInstructionData)?
         .try_into()
-        .unwrap();
+        .map_err(|_| ProgramError::InvalidInstructionData)?;
     let authority_key: &[u8; 32] = authority.address().as_array();
     let (subject, _) =
         Address::find_program_address(&owned_subject_seeds(authority_key, &nonce), &crate::ID);

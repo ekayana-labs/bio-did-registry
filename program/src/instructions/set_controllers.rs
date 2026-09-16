@@ -46,6 +46,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
             others[i] = s;
         }
     }
+    ix_finish(args, off)?;
     let new_sections_len = off;
     let signer_key: &[u8] = authority.address().as_ref();
 
