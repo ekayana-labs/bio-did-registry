@@ -831,6 +831,31 @@ fn test_key_rotation_and_protection() {
     );
     assert_custom_err(res, 6000, "Unauthorized");
 
+    // #default named the founding key; nothing else may take the fragment,
+    // neither a method under the new authority nor a service.
+    let res = send(
+        &mut svm,
+        add_vm_ix(
+            &r,
+            &r,
+            &s,
+            "default",
+            VM_TYPE_ED25519,
+            VM_FLAG_AUTHENTICATION,
+            Keypair::new().pubkey().as_ref(),
+        ),
+        &rotation,
+        &[],
+    );
+    assert_custom_err(res, 6002, "InvalidFragment (reserved)");
+    let res = send(
+        &mut svm,
+        add_service_ix(&r, &r, &s, "default", "BioMetadata", "ipfs://x"),
+        &rotation,
+        &[],
+    );
+    assert_custom_err(res, 6002, "InvalidFragment (reserved service)");
+
     // Removing the final authority is impossible.
     let res = send(
         &mut svm,

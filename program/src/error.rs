@@ -11,7 +11,7 @@ pub enum DidError {
     Unauthorized = 6000,
     /// This DID has been permanently deactivated
     DidDeactivated = 6001,
-    /// Fragment is empty, too long, or contains invalid characters
+    /// Fragment is empty, too long, reserved, or contains invalid characters
     InvalidFragment = 6002,
     /// A verification method or service with this fragment already exists
     FragmentAlreadyInUse = 6003,

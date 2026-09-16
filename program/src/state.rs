@@ -59,7 +59,9 @@ pub fn owned_subject(authority: &[u8; 32], nonce: u64) -> [u8; 32] {
     *subject.as_array()
 }
 
-/// Reserved fragment for the subject's initial verification method.
+/// The fragment of the founding verification method, written by
+/// `initialize` and `initialize_owned` and never accepted from an
+/// instruction: once that method is gone, `#default` stays gone.
 pub const DEFAULT_FRAGMENT: &[u8] = b"default";
 
 pub const MAX_VERIFICATION_METHODS: usize = 16;
@@ -464,7 +466,8 @@ pub fn authority_count(data: &[u8], s: &Sections) -> Result<usize, ProgramError>
     Ok(n)
 }
 
-/// Fragments are unique across verification methods AND services.
+/// Fragments are unique across verification methods AND services, and
+/// `#default` belongs to the founding method alone.
 pub fn require_fragment_free(
     data: &[u8],
     s: &Sections,
@@ -487,7 +490,8 @@ pub fn require_fragment_free(
             Ok(true)
         })?;
     }
-    require(!taken, DidError::FragmentAlreadyInUse)
+    require(!taken, DidError::FragmentAlreadyInUse)?;
+    require(fragment != DEFAULT_FRAGMENT, DidError::InvalidFragment)
 }
 
 /// Flag sanity per key type:

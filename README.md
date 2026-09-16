@@ -153,6 +153,9 @@ Core invariants enforced on-chain:
 - only `capabilityInvocation` Ed25519 keys may mutate a document
 - the last update authority can never be removed or de-flagged
 - `PROTECTED` verification methods only change under their own key
+- `#default` names the founding key and nothing else: no instruction can
+  add a method or service under that fragment, even after the founding
+  method was rotated out
 - a sponsor who pays for `initialize` gains no control over the DID
 - a key subject is a key: `initialize` refuses off-curve addresses, so no
   DID is ever born without an authority and no owned subject can be
