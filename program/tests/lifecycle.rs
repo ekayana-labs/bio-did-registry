@@ -554,6 +554,34 @@ fn test_trailing_instruction_bytes_are_rejected() {
 }
 
 #[test]
+fn test_account_length_must_match_the_layout() {
+    let mut svm = setup();
+    let subject = Keypair::new();
+    svm.airdrop(&subject.pubkey(), AIRDROP).unwrap();
+    let s = subject.pubkey();
+    send(&mut svm, initialize_ix(&s, &s), &subject, &[]).unwrap();
+    let pda = did_pda(&s);
+
+    // A byte the layout does not account for is corruption, not slack:
+    // every mutation refuses the account instead of guessing.
+    let mut account = svm.get_account(&pda).unwrap();
+    account.data.push(0);
+    svm.set_account(pda, account).unwrap();
+    let res = send(
+        &mut svm,
+        add_service_ix(&s, &s, &s, "meta", "BioMetadata", "ipfs://x"),
+        &subject,
+        &[],
+    );
+    assert!(
+        res.as_ref().unwrap_err().contains("InvalidAccountData"),
+        "expected InvalidAccountData, got: {res:?}"
+    );
+    let res = send(&mut svm, deactivate_ix(&s, &s, &s), &subject, &[]);
+    assert!(res.unwrap_err().contains("InvalidAccountData"));
+}
+
+#[test]
 fn test_sponsored_initialize_grants_no_control_to_payer() {
     let mut svm = setup();
     let sponsor = Keypair::new();

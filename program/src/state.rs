@@ -292,13 +292,16 @@ pub struct Sections {
     pub svc_count: usize,
     pub svc_count_pos: usize,
     pub svc_items: usize,
-    /// Total serialized size (== account data length for a healthy account).
+    /// Total serialized size; always equal to the account data length, since
+    /// [`Sections::parse`] rejects anything shorter or longer.
     pub end: usize,
 }
 
 impl Sections {
-    /// Walk the vector sections. Expects `data` to start at the account
-    /// discriminator; the discriminator itself is checked by the caller.
+    /// Walk the vector sections. Expects `data` to be the whole account
+    /// data, starting at the discriminator (which the caller has checked):
+    /// the layout must account for every byte, so handlers can treat `end`
+    /// as the account length when they move the tail.
     pub fn parse(data: &[u8]) -> Result<Self, ProgramError> {
         let mut off = OFF_SECTIONS;
 
@@ -329,6 +332,9 @@ impl Sections {
             read_len_prefixed(data, &mut off)?; // fragment
             read_len_prefixed(data, &mut off)?; // service_type
             read_len_prefixed(data, &mut off)?; // endpoint
+        }
+        if off != data.len() {
+            return Err(ProgramError::InvalidAccountData);
         }
 
         Ok(Self {
