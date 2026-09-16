@@ -497,10 +497,12 @@ pub fn require_fragment_free(
 /// Flag sanity per key type:
 /// - only known bits may be set;
 /// - capabilityInvocation implies on-chain signing, so Ed25519 only;
+/// - protection is proven by the method's own key signing a transaction,
+///   so it is Ed25519 only as well;
 /// - X25519 is a key-agreement key and cannot sign anything.
 pub fn validate_vm_flags(method_type: u8, flags: u16) -> Result<(), ProgramError> {
     require(flags & !VM_VALID_MASK == 0, DidError::InvalidFlags)?;
-    if flags & VM_FLAG_CAPABILITY_INVOCATION != 0 {
+    if flags & (VM_FLAG_CAPABILITY_INVOCATION | VM_FLAG_PROTECTED) != 0 {
         require(method_type == VM_TYPE_ED25519, DidError::InvalidFlags)?;
     }
     if method_type == VM_TYPE_X25519 {

@@ -1831,7 +1831,21 @@ fn test_create_key_buffer_validation() {
         &subject,
         &[],
     );
-    assert_custom_err(res, 6011, "ProtectedVerificationMethod (large key)");
+    assert_custom_err(res, 6010, "InvalidFlags (protection is Ed25519 only)");
+    // Nor can a key-agreement key be protected, even when its bytes happen
+    // to be the signer's.
+    let res = send(
+        &mut svm,
+        create(
+            "xprot",
+            VM_TYPE_X25519,
+            VM_FLAG_KEY_AGREEMENT | VM_FLAG_PROTECTED,
+            32,
+        ),
+        &subject,
+        &[],
+    );
+    assert_custom_err(res, 6010, "InvalidFlags (protected X25519)");
     let res = send(
         &mut svm,
         create("pq", 9, VM_FLAG_ASSERTION, 2592),

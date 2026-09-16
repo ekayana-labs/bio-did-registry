@@ -152,7 +152,8 @@ Core invariants enforced on-chain:
 
 - only `capabilityInvocation` Ed25519 keys may mutate a document
 - the last update authority can never be removed or de-flagged
-- `PROTECTED` verification methods only change under their own key
+- `PROTECTED` verification methods only change under their own key, so
+  only Ed25519 methods, the kind that can sign a transaction, carry it
 - `#default` names the founding key and nothing else: no instruction can
   add a method or service under that fragment, even after the founding
   method was rotated out

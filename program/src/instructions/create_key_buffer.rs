@@ -49,12 +49,9 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         require(valid_fragment(fragment), DidError::InvalidFragment)?;
         require_fragment_free(&data, &s, fragment)?;
         require(key_len == expected_len, DidError::InvalidKeyLength)?;
+        // Protection is Ed25519 only, so a protected upload is always 32
+        // bytes; whether they are the signer's own is settled on finish.
         validate_vm_flags(method_type, flags)?;
-        // A protected method must carry the signer's own 32 byte key, which
-        // a larger key can never satisfy when the buffer is finished.
-        if flags & VM_FLAG_PROTECTED != 0 {
-            require(key_len == 32, DidError::ProtectedVerificationMethod)?;
-        }
     }
 
     let (pda, bump) = Address::find_program_address(
