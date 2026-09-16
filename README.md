@@ -41,6 +41,9 @@ All mutations require an Ed25519 signature from a verification method
 carrying the `capabilityInvocation` relationship. `initialize` is
 permissionless, so a platform can sponsor account creation while the subject
 keeps sole control: the created state is exactly the generative document.
+The subject has to be a key: an address off the Ed25519 curve is refused
+(`InvalidArgument`), since nothing could ever sign for the document it
+would name.
 
 A DID does not have to be a key. `initialize_owned(nonce)` derives the
 subject from the signing authority (`["bio-did-owned", authority, nonce]`,
@@ -149,6 +152,9 @@ Core invariants enforced on-chain:
 - the last update authority can never be removed or de-flagged
 - `PROTECTED` verification methods only change under their own key
 - a sponsor who pays for `initialize` gains no control over the DID
+- a key subject is a key: `initialize` refuses off-curve addresses, so no
+  DID is ever born without an authority and no owned subject can be
+  squatted ahead of its owner
 - an owned DID is created only under its authority's signature
 - deactivation is permanent (tombstone, never account closure)
 - a key buffer is bound to the authority that opened it and to one DID

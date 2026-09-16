@@ -458,6 +458,42 @@ fn test_initialize_creates_generative_default() {
 }
 
 #[test]
+fn test_initialize_refuses_subjects_that_are_not_keys() {
+    let mut svm = setup();
+    let payer = Keypair::new();
+    svm.airdrop(&payer.pubkey(), AIRDROP).unwrap();
+
+    // A program-derived address is off the curve: nothing could ever sign
+    // for the document, so the registry refuses to create it.
+    let off_curve = owned_subject(&payer.pubkey(), 7);
+    assert!(!off_curve.is_on_curve());
+    let res = send(
+        &mut svm,
+        initialize_ix(&payer.pubkey(), &off_curve),
+        &payer,
+        &[],
+    );
+    assert!(
+        res.as_ref().unwrap_err().contains("InvalidArgument"),
+        "expected InvalidArgument, got: {res:?}"
+    );
+    assert!(svm.get_account(&did_pda(&off_curve)).is_none());
+
+    // The same address is fine as an owned subject, under its authority.
+    send(
+        &mut svm,
+        initialize_owned_ix(&payer.pubkey(), &payer.pubkey(), 7),
+        &payer,
+        &[&payer],
+    )
+    .unwrap();
+    assert_eq!(
+        decode(&svm, &did_pda(&off_curve)).subject,
+        off_curve.to_bytes()
+    );
+}
+
+#[test]
 fn test_sponsored_initialize_grants_no_control_to_payer() {
     let mut svm = setup();
     let sponsor = Keypair::new();

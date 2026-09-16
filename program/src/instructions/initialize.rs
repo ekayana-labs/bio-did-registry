@@ -4,6 +4,12 @@
 //! but the stored document is exactly the generative default - the subject
 //! key itself is the only verification method and only authority - so a
 //! third party initializer gains no control.
+//!
+//! The subject must be a key. An address off the Ed25519 curve can never
+//! sign, so the document it would name could not be edited or even
+//! deactivated and its rent would be locked for good; it is also how an
+//! owned subject could be squatted ahead of its owner. Such subjects only
+//! enter through `initialize_owned`.
 
 use pinocchio::{
     cpi::{Seed, Signer},
@@ -20,10 +26,11 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
     let subject: &[u8; 32] = args
-        .get(0..32)
-        .ok_or(ProgramError::InvalidInstructionData)?
         .try_into()
-        .unwrap();
+        .map_err(|_| ProgramError::InvalidInstructionData)?;
+    if !Address::new_from_array(*subject).is_on_curve() {
+        return Err(ProgramError::InvalidArgument);
+    }
     materialize(payer, did_account, system_program, subject, subject)
 }
 
