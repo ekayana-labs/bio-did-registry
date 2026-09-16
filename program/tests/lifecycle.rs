@@ -1020,6 +1020,22 @@ fn test_services_and_controllers() {
         &[],
     );
     assert_custom_err(res, 6013, "InvalidController (did:bio in other)");
+    // An external controller is did:<method>:<id>, nothing less.
+    for bad in [
+        "did:",
+        "did:web",
+        "did:web:",
+        "did:Web:lab.example.org",
+        "web:lab",
+    ] {
+        let res = send(
+            &mut svm,
+            set_controllers_ix(&s, &s, &s, &[], &[bad]),
+            &subject,
+            &[],
+        );
+        assert_custom_err(res, 6013, &format!("InvalidController ({bad})"));
+    }
 
     // Remove service refunds rent and shrinks the account.
     let before = svm.get_account(&pda).unwrap();

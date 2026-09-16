@@ -526,6 +526,29 @@ pub fn valid_uri_ascii(value: &[u8], max_len: usize) -> bool {
     !value.is_empty() && value.len() <= max_len && value.iter().all(|&b| (0x21..=0x7e).contains(&b))
 }
 
+/// An external controller is a DID of another method, `did:<method>:<id>`
+/// as the DID syntax defines it: a lowercase alphanumeric method name and
+/// a non-empty method-specific id, in printable ASCII of bounded length.
+/// did:bio controllers use the native (key) form instead.
+pub fn valid_external_controller(value: &[u8]) -> bool {
+    if !valid_uri_ascii(value, MAX_CONTROLLER_LEN) {
+        return false;
+    }
+    let Some(rest) = value.strip_prefix(b"did:") else {
+        return false;
+    };
+    let Some(colon) = rest.iter().position(|&b| b == b':') else {
+        return false;
+    };
+    let (method, id) = (&rest[..colon], &rest[colon + 1..]);
+    !method.is_empty()
+        && method != b"bio"
+        && method
+            .iter()
+            .all(|&b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        && !id.is_empty()
+}
+
 /// Bump `version` (saturating) and stamp `updated_at`.
 #[inline]
 pub fn touch(data: &mut [u8], now: i64) {
