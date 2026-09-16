@@ -2,6 +2,11 @@
 //! consumed per instruction, asserting a generous ceiling per instruction so
 //! CI catches cost regressions.
 //!
+//! The keys are fixed so the numbers are reproducible: every PDA search
+//! (`initialize`, `initialize_owned` twice, `create_key_buffer`) costs
+//! 1500 CU per rejected bump candidate, which would otherwise make the
+//! report, and the ceiling check, vary from run to run.
+//!
 //! Run with output: `cargo test --test compute_units -- --nocapture`
 
 use std::path::PathBuf;
@@ -17,9 +22,15 @@ use solana_transaction::versioned::VersionedTransaction;
 
 const PROGRAM_ID: &str = "H1gnV4GjNT3UV7AgGNUCkSaciuVVtM7hKb8JhPV3Xxy6";
 
-/// Per-instruction ceiling. Measured costs sit at 3-8k CU; a breach of this
+/// Per-instruction ceiling. Measured costs sit at 2-9k CU; a breach of this
 /// bound means something regressed badly.
 const CU_CEILING: u64 = 15_000;
+
+/// Deterministic keys: the subject that signs everything, the rotation key
+/// it adds, and two controller addresses.
+fn fixed_keypair(tag: u8) -> Keypair {
+    Keypair::new_from_array([tag; 32])
+}
 
 /// Largest chunk that keeps a single-signer `write_key_buffer` transaction
 /// under the 1232 byte packet limit.
@@ -53,7 +64,7 @@ impl World {
         .expect("build first: cargo build-sbf --manifest-path program/Cargo.toml");
         let mut svm = LiteSVM::new();
         svm.add_program(program_id(), &so).unwrap();
-        let subject = Keypair::new();
+        let subject = fixed_keypair(1);
         svm.airdrop(&subject.pubkey(), 10_000_000_000).unwrap();
         let pda =
             Pubkey::find_program_address(&[b"bio-did", subject.pubkey().as_ref()], &program_id()).0;
@@ -177,9 +188,9 @@ impl World {
 
 #[test]
 fn lifecycle_compute_unit_report() {
-    let rotation = Keypair::new();
-    let lab = Keypair::new().pubkey();
-    let lab2 = Keypair::new().pubkey();
+    let rotation = fixed_keypair(2);
+    let lab = fixed_keypair(3).pubkey();
+    let lab2 = fixed_keypair(4).pubkey();
     let mut w = World::new();
 
     type Step<'a> = (&'a str, Box<dyn Fn(&mut World) -> u64>);

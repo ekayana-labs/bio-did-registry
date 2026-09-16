@@ -54,7 +54,7 @@ owns, pays for and controls with one signature. See [Owned DIDs](#owned-dids).
 The program is built with [Pinocchio](https://github.com/anza-xyz/pinocchio):
 `no_std`, allocation-free (`no_allocator!`), with account data edited in
 place - a document holding sixteen 2.5 KB post-quantum keys costs the same
-~3-6k compute units per edit as a minimal one. Accounts are exact-size at
+few thousand compute units per edit as a minimal one. Accounts are exact-size at
 all times: every instruction reallocates to the minimal serialized layout
 and settles the balance to exactly the rent-exempt minimum (growth funded by
 the payer, shrinkage refunded to the payer).
@@ -192,25 +192,28 @@ cargo test --test compute_units -- --nocapture
 
 ## Compute Units
 
-Baselines measured with the `compute_units` test (rounded to hundreds;
-`initialize` and `create_key_buffer` vary with the PDA bump search). The
-binary is ~93 KB and the per edit cost is independent of document size.
+Measured by the `compute_units` test with fixed keys, so the figures are
+reproducible. An instruction that derives a PDA on chain pays 1500 CU for
+every bump candidate the search rejects; the table says how many the test
+keys hit, so a search that succeeds at the first candidate costs the figure
+minus 1500 per rejection. The binary is ~95 KB and the per edit cost is
+independent of document size.
 
-| Instruction | Estimated Cost |
+| Instruction | CU |
 | --- | --- |
-| `initialize` | 3600+ |
-| `initialize_owned` | 5200+ |
-| `add_verification_method` (Ed25519) | 4900 |
-| `create_key_buffer` (ML-DSA-87, 2.5 KB) | 5600+ |
-| `write_key_buffer` (900 B chunk) | 1900 |
-| `add_verification_method_from_buffer` (2.5 KB key) | 6600 |
-| `close_key_buffer` | 1800 |
-| `remove_verification_method` | 3500 |
-| `set_verification_method_flags` | 3100 |
-| `add_service` | 5900 |
-| `remove_service` | 3400 |
-| `set_controllers` (2 native + 2 external) | 5700 |
-| `deactivate` | 2900 |
+| `initialize` (1 rejected bump) | 5529 |
+| `initialize_owned` (two searches, 1 rejected bump) | 6910 |
+| `add_verification_method` (Ed25519) | 5175 |
+| `create_key_buffer` (ML-DSA-87, 2.5 KB; 2 rejected bumps) | 8892 |
+| `write_key_buffer` (900 B chunk) | 1840 |
+| `add_verification_method_from_buffer` (2.5 KB key) | 6847 |
+| `close_key_buffer` | 1808 |
+| `remove_verification_method` (2.5 KB key) | 3759 |
+| `set_verification_method_flags` | 3080 |
+| `add_service` | 6220 |
+| `remove_service` | 3701 |
+| `set_controllers` (2 native + 2 external) | 6129 |
+| `deactivate` | 3210 |
 
 ## License
 
