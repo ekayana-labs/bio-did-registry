@@ -23,7 +23,7 @@ prints the per-instruction compute-unit report.
 
 - **The wire format is frozen.** Instruction/account/event discriminators,
   the borsh account layout, PDA seeds, and the domain error codes
-  (6000..6014) are consumed by deployed clients and the
+  (6000..=6017) are consumed by deployed clients and the
   [`did-bio-core`](https://github.com/ekayana-labs/did-bio-core) resolver.
   Changes to any of them are breaking protocol changes and need an issue and
   a migration story first.

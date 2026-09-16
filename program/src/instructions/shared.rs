@@ -89,6 +89,16 @@ pub fn verify_key_buffer(
     authority: &Address,
     did_account: Option<&Address>,
 ) -> Result<(), ProgramError> {
+    check_key_buffer(key_buffer, authority, did_account).map(|_| ())
+}
+
+/// [`verify_key_buffer`], also returning how far the upload has come:
+/// `(written, key_len)`.
+pub(crate) fn check_key_buffer(
+    key_buffer: &AccountView,
+    authority: &Address,
+    did_account: Option<&Address>,
+) -> Result<(usize, usize), ProgramError> {
     if !key_buffer.is_writable() {
         return Err(ProgramError::Immutable);
     }
@@ -115,7 +125,7 @@ pub fn verify_key_buffer(
     if key_buffer.address() != &expected {
         return Err(ProgramError::InvalidSeeds);
     }
-    Ok(())
+    Ok((kb.written, kb.key_len))
 }
 
 /// Move every lamport to the payer and close the account.

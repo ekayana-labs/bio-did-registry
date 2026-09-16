@@ -72,6 +72,10 @@ pub const MAX_FRAGMENT_LEN: usize = 32;
 pub const MAX_SERVICE_TYPE_LEN: usize = 64;
 pub const MAX_ENDPOINT_LEN: usize = 512;
 pub const MAX_CONTROLLER_LEN: usize = 128;
+#[deprecated(
+    since = "0.1.2",
+    note = "the program never reads it; key lengths are fixed per type by expected_key_len"
+)]
 pub const MAX_KEY_DATA_LEN: usize = 2592;
 
 // Verification relationship / property bitflags (low five bits mirror the

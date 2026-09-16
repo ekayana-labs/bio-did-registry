@@ -22,12 +22,11 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let subject = verify_did_account(did_account)?;
     let signer_key: &[u8] = authority.address().as_ref();
 
-    let old_len = {
+    {
         let data = did_account.try_borrow()?;
         let s = Sections::parse(&data)?;
         require_authority(&data, &s, signer_key.try_into().unwrap())?;
-        s.end
-    };
+    }
 
     let now = Clock::get()?.unix_timestamp;
     let new_version;
@@ -39,7 +38,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         touch(&mut data, now);
         new_version = version(&data);
     }
-    shrink(did_account, payer, TOMBSTONE_SPACE.min(old_len))?;
+    shrink(did_account, payer, TOMBSTONE_SPACE)?;
 
     events::emit(
         &events::DID_DEACTIVATED,
