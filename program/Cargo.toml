@@ -37,9 +37,9 @@ solana-message = "4"
 solana-transaction = "4"
 solana-signer = "3"
 solana-keypair = "3"
-solana-pubkey = "3"
+solana-pubkey = "4"
 solana-instruction = "3"
-base64 = "0.22"
+base64 = "0.23"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
