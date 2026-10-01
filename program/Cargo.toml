@@ -39,6 +39,7 @@ solana-signer = "3"
 solana-keypair = "3"
 solana-pubkey = "4"
 solana-instruction = "3"
+solana-rent = "4"
 base64 = "0.23"
 
 [lints.rust]

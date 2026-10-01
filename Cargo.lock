@@ -421,6 +421,7 @@ dependencies = [
  "solana-keypair",
  "solana-message",
  "solana-pubkey 4.2.1",
+ "solana-rent",
  "solana-signer",
  "solana-transaction",
 ]

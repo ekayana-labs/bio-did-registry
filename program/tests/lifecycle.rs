@@ -1184,6 +1184,54 @@ fn test_deactivate_is_permanent_tombstone() {
 }
 
 #[test]
+fn test_rent_settles_under_every_exemption_threshold() {
+    // Clusters have carried thresholds of 2.0 and then 1.0, and the program
+    // reads both without float math. Any other value takes the float path.
+    for (lamports_per_byte, threshold) in [(6960u64, 1.0f64), (3480, 2.0), (4640, 1.5)] {
+        let mut svm = setup();
+        #[allow(deprecated)]
+        svm.set_sysvar(&solana_rent::Rent {
+            lamports_per_byte,
+            exemption_threshold: threshold.to_le_bytes(),
+            burn_percent: 50,
+        });
+        let subject = Keypair::new();
+        svm.airdrop(&subject.pubkey(), AIRDROP).unwrap();
+        let s = subject.pubkey();
+        let pda = did_pda(&s);
+        let exact = |svm: &LiteSVM| {
+            let account = svm.get_account(&pda).unwrap();
+            assert_eq!(
+                account.lamports,
+                svm.minimum_balance_for_rent_exemption(account.data.len()),
+                "threshold {threshold}"
+            );
+        };
+
+        send(&mut svm, initialize_ix(&s, &s), &subject, &[]).unwrap();
+        exact(&svm);
+        send(
+            &mut svm,
+            add_service_ix(&s, &s, &s, "meta", "BioMetadata", "ipfs://x"),
+            &subject,
+            &[],
+        )
+        .unwrap();
+        exact(&svm);
+        send(
+            &mut svm,
+            remove_service_ix(&s, &s, &s, "meta"),
+            &subject,
+            &[],
+        )
+        .unwrap();
+        exact(&svm);
+        send(&mut svm, deactivate_ix(&s, &s, &s), &subject, &[]).unwrap();
+        exact(&svm);
+    }
+}
+
+#[test]
 fn test_events_wire_format() {
     let mut svm = setup();
     let subject = Keypair::new();

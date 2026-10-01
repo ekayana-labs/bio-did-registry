@@ -191,11 +191,12 @@ pub fn close_to(account: &mut AccountView, payer: &mut AccountView) -> Result<()
 /// and `pinocchio::sysvars::rent::Rent` assumes the condensed 8-byte
 /// `{ lamports_per_byte: u64 }`. Relying on pinocchio's `Rent::get()` alone
 /// under-funds by the exemption threshold on a classic-layout runtime whose
-/// threshold is 2.0.
+/// threshold is 2.0. Current clusters carry 1.0.
 pub fn rent_minimum_balance(data_len: usize) -> Result<u64, ProgramError> {
     const ACCOUNT_STORAGE_OVERHEAD: u64 = 128;
-    // f64 2.0 in little-endian IEEE-754. Comparing the bits avoids float ops
-    // when the threshold is 2.0.
+    // f64 1.0 and 2.0 in little-endian IEEE-754. Comparing the bits avoids
+    // float ops on those thresholds.
+    const ONE_F64_LE: [u8; 8] = [0, 0, 0, 0, 0, 0, 0xf0, 0x3f];
     const TWO_F64_LE: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0x40];
 
     let bytes = ACCOUNT_STORAGE_OVERHEAD
@@ -211,7 +212,9 @@ pub fn rent_minimum_balance(data_len: usize) -> Result<u64, ProgramError> {
             let base = bytes
                 .checked_mul(lamports_per_byte_year)
                 .ok_or(ProgramError::ArithmeticOverflow)?;
-            if threshold == TWO_F64_LE {
+            if threshold == ONE_F64_LE {
+                Ok(base)
+            } else if threshold == TWO_F64_LE {
                 base.checked_mul(2).ok_or(ProgramError::ArithmeticOverflow)
             } else {
                 let threshold = f64::from_le_bytes(threshold);
