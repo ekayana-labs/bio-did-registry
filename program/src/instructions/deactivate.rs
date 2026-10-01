@@ -9,23 +9,28 @@ use pinocchio::{
     AccountView, ProgramResult,
 };
 
-use crate::{events, instructions::shared::*, state::*};
+use crate::{
+    events,
+    instructions::shared::*,
+    reader::{Args, Reader},
+    state::*,
+};
 
 pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let [payer, authority, did_account, system_program, ..] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
-    ix_finish(args, 0)?;
+    Reader::<Args>::new(args).finish()?;
     check_payer(payer)?;
     check_authority_signer(authority)?;
     check_system_program(system_program)?;
     let subject = verify_did_account(did_account)?;
-    let signer_key: &[u8] = authority.address().as_ref();
+    let signer_key = authority.address().as_array();
 
     {
         let data = did_account.try_borrow()?;
         let s = Sections::parse(&data)?;
-        require_authority(&data, &s, signer_key.try_into().unwrap())?;
+        require_authority(&data, &s, signer_key)?;
     }
 
     let now = Clock::get()?.unix_timestamp;

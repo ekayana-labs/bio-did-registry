@@ -11,19 +11,25 @@ use pinocchio::{
     AccountView, ProgramResult,
 };
 
-use crate::{error::*, events, instructions::shared::*, state::*};
+use crate::{
+    error::*,
+    events,
+    instructions::shared::*,
+    reader::{Args, Reader},
+    state::*,
+};
 
 pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let [payer, authority, did_account, key_buffer, system_program, ..] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
-    ix_finish(args, 0)?;
+    Reader::<Args>::new(args).finish()?;
     check_payer(payer)?;
     check_authority_signer(authority)?;
     check_system_program(system_program)?;
     let subject = verify_did_account(did_account)?;
     verify_key_buffer(key_buffer, authority.address(), Some(did_account.address()))?;
-    let signer_key: &[u8] = authority.address().as_ref();
+    let signer_key = authority.address().as_array();
 
     // The header scalars and the fragment are copied out, since the write
     // below needs the DID account mutably while the key is read from the
@@ -38,7 +44,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         let key = kb.key(&buf);
         let data = did_account.try_borrow()?;
         let s = Sections::parse(&data)?;
-        require_authority(&data, &s, signer_key.try_into().unwrap())?;
+        require_authority(&data, &s, signer_key)?;
         require(
             s.vm_count < MAX_VERIFICATION_METHODS,
             DidError::TooManyVerificationMethods,

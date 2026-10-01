@@ -6,7 +6,12 @@
 
 use pinocchio::{error::ProgramError, AccountView, ProgramResult};
 
-use crate::{error::*, instructions::shared::*, state::*};
+use crate::{
+    error::*,
+    instructions::shared::*,
+    reader::{Args, Reader},
+    state::*,
+};
 
 pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let [authority, key_buffer, ..] = accounts else {
@@ -16,10 +21,10 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let (written, key_len) = check_key_buffer(key_buffer, authority.address(), None)?;
 
     // The borsh arguments are offset: u32 and chunk: Vec<u8>.
-    let mut off = 0usize;
-    let offset = ix_read_u32(args, &mut off)? as usize;
-    let chunk = ix_read_len_prefixed(args, &mut off)?;
-    ix_finish(args, off)?;
+    let mut r = Reader::<Args>::new(args);
+    let offset = r.u32()? as usize;
+    let chunk = r.len_prefixed()?;
+    r.finish()?;
 
     let mut data = key_buffer.try_borrow_mut()?;
     require(

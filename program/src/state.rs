@@ -28,6 +28,7 @@
 use pinocchio::error::ProgramError;
 
 use crate::error::{require, DidError};
+use crate::reader::{Account, Reader};
 
 /// sha256("account:DidAccount")[..8], written at initialize and checked on
 /// every load.
@@ -205,35 +206,31 @@ impl<'a> KeyBufferRef<'a> {
     /// Read the header of a buffer whose discriminator was already checked.
     /// The data length must match the declared key length exactly.
     pub fn parse(data: &'a [u8]) -> Result<Self, ProgramError> {
-        if data.len() < KEY_BUFFER_HEADER {
-            return Err(ProgramError::InvalidAccountData);
-        }
-        let key_len =
-            u32::from_le_bytes(data[KB_OFF_KEY_LEN..KB_OFF_KEY_LEN + 4].try_into().unwrap())
-                as usize;
-        let written =
-            u32::from_le_bytes(data[KB_OFF_WRITTEN..KB_OFF_WRITTEN + 4].try_into().unwrap())
-                as usize;
-        let fragment_len = u32::from_le_bytes(
-            data[KB_OFF_FRAGMENT_LEN..KB_OFF_FRAGMENT_LEN + 4]
-                .try_into()
-                .unwrap(),
-        ) as usize;
-        if data.len() != KEY_BUFFER_HEADER + key_len
-            || written > key_len
-            || fragment_len > MAX_FRAGMENT_LEN
-        {
+        let (header, key) = data
+            .split_first_chunk::<KEY_BUFFER_HEADER>()
+            .ok_or(ProgramError::InvalidAccountData)?;
+        let mut r = Reader::<Account>::at(header, KB_OFF_DID_ACCOUNT)?;
+        let did_account = r.array::<32>()?;
+        let authority = r.array::<32>()?;
+        let bump = r.u8()?;
+        let method_type = r.u8()?;
+        let flags = r.u16()?;
+        let key_len = r.u32()? as usize;
+        let written = r.u32()? as usize;
+        let fragment_len = r.u32()? as usize;
+        let fragment = r.array::<MAX_FRAGMENT_LEN>()?;
+        if key.len() != key_len || written > key_len || fragment_len > MAX_FRAGMENT_LEN {
             return Err(ProgramError::InvalidAccountData);
         }
         Ok(Self {
-            did_account: &data[KB_OFF_DID_ACCOUNT..KB_OFF_DID_ACCOUNT + 32],
-            authority: &data[KB_OFF_AUTHORITY..KB_OFF_AUTHORITY + 32],
-            bump: data[KB_OFF_BUMP],
-            method_type: data[KB_OFF_METHOD_TYPE],
-            flags: u16::from_le_bytes(data[KB_OFF_FLAGS..KB_OFF_FLAGS + 2].try_into().unwrap()),
+            did_account,
+            authority,
+            bump,
+            method_type,
+            flags,
             key_len,
             written,
-            fragment: &data[KB_OFF_FRAGMENT..KB_OFF_FRAGMENT + fragment_len],
+            fragment: &fragment[..fragment_len],
         })
     }
 
@@ -244,38 +241,39 @@ impl<'a> KeyBufferRef<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// Bounds-checked cursor reads
+// Bounds-checked offset reads, kept for callers of earlier releases
 // ---------------------------------------------------------------------------
 
+#[deprecated(note = "use `reader::Reader`")]
 #[inline(always)]
 pub fn read_u32(data: &[u8], off: &mut usize) -> Result<u32, ProgramError> {
-    let bytes: [u8; 4] = data
-        .get(*off..*off + 4)
-        .ok_or(ProgramError::InvalidAccountData)?
-        .try_into()
-        .unwrap();
-    *off += 4;
-    Ok(u32::from_le_bytes(bytes))
+    let mut r = Reader::<Account>::at(data, *off)?;
+    let value = r.u32()?;
+    *off = r.offset();
+    Ok(value)
 }
 
+#[deprecated(note = "use `reader::Reader`")]
 #[inline(always)]
 pub fn read_bytes<'a>(
     data: &'a [u8],
     off: &mut usize,
     len: usize,
 ) -> Result<&'a [u8], ProgramError> {
-    let bytes = data
-        .get(*off..*off + len)
-        .ok_or(ProgramError::InvalidAccountData)?;
-    *off += len;
+    let mut r = Reader::<Account>::at(data, *off)?;
+    let bytes = r.bytes(len)?;
+    *off = r.offset();
     Ok(bytes)
 }
 
 /// Reads a borsh `String` or `Vec<u8>`, a u32 length prefix and then the payload.
+#[deprecated(note = "use `reader::Reader`")]
 #[inline(always)]
 pub fn read_len_prefixed<'a>(data: &'a [u8], off: &mut usize) -> Result<&'a [u8], ProgramError> {
-    let len = read_u32(data, off)? as usize;
-    read_bytes(data, off, len)
+    let mut r = Reader::<Account>::at(data, *off)?;
+    let bytes = r.len_prefixed()?;
+    *off = r.offset();
+    Ok(bytes)
 }
 
 // ---------------------------------------------------------------------------
@@ -309,39 +307,38 @@ impl Sections {
     /// account for every byte, so handlers can treat `end` as the account
     /// length when they move the tail.
     pub fn parse(data: &[u8]) -> Result<Self, ProgramError> {
-        let mut off = OFF_SECTIONS;
+        let mut r = Reader::<Account>::at(data, OFF_SECTIONS)?;
 
-        let nc_count = read_u32(data, &mut off)? as usize;
-        let nc_items = off;
-        read_bytes(data, &mut off, nc_count * 32)?;
+        let nc_count = r.u32()? as usize;
+        let nc_items = r.offset();
+        r.bytes(nc_count * 32)?;
 
-        let oc_count_pos = off;
-        let oc_count = read_u32(data, &mut off)? as usize;
-        let oc_items = off;
+        let oc_count_pos = r.offset();
+        let oc_count = r.u32()? as usize;
+        let oc_items = r.offset();
         for _ in 0..oc_count {
-            read_len_prefixed(data, &mut off)?;
+            r.len_prefixed()?;
         }
 
-        let vm_count_pos = off;
-        let vm_count = read_u32(data, &mut off)? as usize;
-        let vm_items = off;
+        let vm_count_pos = r.offset();
+        let vm_count = r.u32()? as usize;
+        let vm_items = r.offset();
         for _ in 0..vm_count {
-            read_len_prefixed(data, &mut off)?; // fragment
-            read_bytes(data, &mut off, 1 + 2)?; // method_type + flags
-            read_len_prefixed(data, &mut off)?; // key_data
+            r.len_prefixed()?; // fragment
+            r.bytes(1 + 2)?; // method_type + flags
+            r.len_prefixed()?; // key_data
         }
 
-        let svc_count_pos = off;
-        let svc_count = read_u32(data, &mut off)? as usize;
-        let svc_items = off;
+        let svc_count_pos = r.offset();
+        let svc_count = r.u32()? as usize;
+        let svc_items = r.offset();
         for _ in 0..svc_count {
-            read_len_prefixed(data, &mut off)?; // fragment
-            read_len_prefixed(data, &mut off)?; // service_type
-            read_len_prefixed(data, &mut off)?; // endpoint
+            r.len_prefixed()?; // fragment
+            r.len_prefixed()?; // service_type
+            r.len_prefixed()?; // endpoint
         }
-        if off != data.len() {
-            return Err(ProgramError::InvalidAccountData);
-        }
+        let end = r.offset();
+        r.finish()?;
 
         Ok(Self {
             nc_count,
@@ -355,7 +352,7 @@ impl Sections {
             svc_count,
             svc_count_pos,
             svc_items,
-            end: off,
+            end,
         })
     }
 }
@@ -381,21 +378,21 @@ pub fn for_each_vm<'a>(
     s: &Sections,
     mut f: impl FnMut(VmRef<'a>) -> Result<bool, ProgramError>,
 ) -> Result<(), ProgramError> {
-    let mut off = s.vm_items;
+    let mut r = Reader::<Account>::at(data, s.vm_items)?;
     for _ in 0..s.vm_count {
-        let start = off;
-        let fragment = read_len_prefixed(data, &mut off)?;
-        let method_type = read_bytes(data, &mut off, 1)?[0];
-        let flags_pos = off;
-        let flags = u16::from_le_bytes(read_bytes(data, &mut off, 2)?.try_into().unwrap());
-        let key = read_len_prefixed(data, &mut off)?;
+        let start = r.offset();
+        let fragment = r.len_prefixed()?;
+        let method_type = r.u8()?;
+        let flags_pos = r.offset();
+        let flags = r.u16()?;
+        let key = r.len_prefixed()?;
         let keep_going = f(VmRef {
             fragment,
             method_type,
             flags,
             key,
             start,
-            end: off,
+            end: r.offset(),
             flags_pos,
         })?;
         if !keep_going {
@@ -418,16 +415,16 @@ pub fn for_each_service<'a>(
     s: &Sections,
     mut f: impl FnMut(SvcRef<'a>) -> Result<bool, ProgramError>,
 ) -> Result<(), ProgramError> {
-    let mut off = s.svc_items;
+    let mut r = Reader::<Account>::at(data, s.svc_items)?;
     for _ in 0..s.svc_count {
-        let start = off;
-        let fragment = read_len_prefixed(data, &mut off)?;
-        read_len_prefixed(data, &mut off)?; // service_type
-        read_len_prefixed(data, &mut off)?; // endpoint
+        let start = r.offset();
+        let fragment = r.len_prefixed()?;
+        r.len_prefixed()?; // service_type
+        r.len_prefixed()?; // endpoint
         let keep_going = f(SvcRef {
             fragment,
             start,
-            end: off,
+            end: r.offset(),
         })?;
         if !keep_going {
             break;
@@ -558,7 +555,7 @@ pub fn valid_external_controller(value: &[u8]) -> bool {
 /// Bump `version`, saturating, and stamp `updated_at`.
 #[inline]
 pub fn touch(data: &mut [u8], now: i64) {
-    let version = u64::from_le_bytes(data[OFF_VERSION..OFF_VERSION + 8].try_into().unwrap());
+    let version = version(data);
     data[OFF_VERSION..OFF_VERSION + 8].copy_from_slice(&version.saturating_add(1).to_le_bytes());
     data[OFF_UPDATED_AT..OFF_UPDATED_AT + 8].copy_from_slice(&now.to_le_bytes());
 }
@@ -566,7 +563,9 @@ pub fn touch(data: &mut [u8], now: i64) {
 /// Current `version` field.
 #[inline]
 pub fn version(data: &[u8]) -> u64 {
-    u64::from_le_bytes(data[OFF_VERSION..OFF_VERSION + 8].try_into().unwrap())
+    let mut field = [0u8; 8];
+    field.copy_from_slice(&data[OFF_VERSION..OFF_VERSION + 8]);
+    u64::from_le_bytes(field)
 }
 
 #[cfg(test)]

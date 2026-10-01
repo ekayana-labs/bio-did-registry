@@ -7,7 +7,13 @@ use pinocchio::{
     AccountView, ProgramResult,
 };
 
-use crate::{error::*, events, instructions::shared::*, state::*};
+use crate::{
+    error::*,
+    events,
+    instructions::shared::*,
+    reader::{Args, Reader},
+    state::*,
+};
 
 pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let [payer, authority, did_account, system_program, ..] = accounts else {
@@ -19,18 +25,18 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let subject = verify_did_account(did_account)?;
 
     // The borsh arguments are Service { fragment, service_type, endpoint }.
-    let mut off = 0usize;
-    let fragment = ix_read_str(args, &mut off)?;
-    let service_type = ix_read_str(args, &mut off)?;
-    let endpoint = ix_read_str(args, &mut off)?;
-    ix_finish(args, off)?;
-    let signer_key: &[u8] = authority.address().as_ref();
+    let mut r = Reader::<Args>::new(args);
+    let fragment = r.str()?;
+    let service_type = r.str()?;
+    let endpoint = r.str()?;
+    r.finish()?;
+    let signer_key = authority.address().as_array();
     let entry_len = service_space(fragment.len(), service_type.len(), endpoint.len());
 
     let (old_len, svc_count_pos, svc_count) = {
         let data = did_account.try_borrow()?;
         let s = Sections::parse(&data)?;
-        require_authority(&data, &s, signer_key.try_into().unwrap())?;
+        require_authority(&data, &s, signer_key)?;
         require(s.svc_count < MAX_SERVICES, DidError::TooManyServices)?;
         require(valid_fragment(fragment), DidError::InvalidFragment)?;
         require_fragment_free(&data, &s, fragment)?;

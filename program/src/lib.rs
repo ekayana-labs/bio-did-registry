@@ -32,6 +32,7 @@
 pub mod error;
 pub mod events;
 pub mod instructions;
+pub mod reader;
 pub mod state;
 
 use pinocchio::{error::ProgramError, AccountView, Address, ProgramResult};
@@ -77,10 +78,10 @@ pub fn process_instruction(
         return Err(ProgramError::IncorrectProgramId);
     }
     let (disc, args) = instruction_data
-        .split_at_checked(8)
+        .split_first_chunk::<8>()
         .ok_or(ProgramError::InvalidInstructionData)?;
 
-    match disc.try_into().unwrap() {
+    match *disc {
         ix::INITIALIZE => instructions::initialize::process(accounts, args),
         ix::ADD_VERIFICATION_METHOD => {
             instructions::add_verification_method::process(accounts, args)

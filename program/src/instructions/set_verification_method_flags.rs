@@ -7,7 +7,13 @@ use pinocchio::{
     AccountView, ProgramResult,
 };
 
-use crate::{error::*, events, instructions::shared::*, state::*};
+use crate::{
+    error::*,
+    events,
+    instructions::shared::*,
+    reader::{Args, Reader},
+    state::*,
+};
 
 pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let [authority, did_account, ..] = accounts else {
@@ -16,18 +22,18 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     check_authority_signer(authority)?;
     let subject = verify_did_account(did_account)?;
 
-    let mut off = 0usize;
-    let fragment = ix_read_str(args, &mut off)?;
-    let new_flags = ix_read_u16(args, &mut off)?;
-    ix_finish(args, off)?;
-    let signer_key: &[u8] = authority.address().as_ref();
+    let mut r = Reader::<Args>::new(args);
+    let fragment = r.str()?;
+    let new_flags = r.u16()?;
+    r.finish()?;
+    let signer_key = authority.address().as_array();
 
     let now = Clock::get()?.unix_timestamp;
     let new_version;
     {
         let mut data = did_account.try_borrow_mut()?;
         let s = Sections::parse(&data)?;
-        require_authority(&data, &s, signer_key.try_into().unwrap())?;
+        require_authority(&data, &s, signer_key)?;
 
         let mut found: Option<(usize, u16, u8, bool)> = None;
         for_each_vm(&data, &s, |vm| {

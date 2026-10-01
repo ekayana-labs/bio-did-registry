@@ -9,7 +9,13 @@ use pinocchio::{
     AccountView, ProgramResult,
 };
 
-use crate::{error::*, events, instructions::shared::*, state::*};
+use crate::{
+    error::*,
+    events,
+    instructions::shared::*,
+    reader::{Args, Reader},
+    state::*,
+};
 
 pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let [payer, authority, did_account, system_program, ..] = accounts else {
@@ -23,37 +29,37 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     // The borsh args are native_controllers: Vec<Pubkey> and other_controllers:
     // Vec<String>, parsed structurally into stack-bounded slices. The count limits
     // are enforced below the authority check so error precedence stays stable.
-    let mut off = 0usize;
-    let native_count = ix_read_u32(args, &mut off)? as usize;
+    let mut r = Reader::<Args>::new(args);
+    let native_count = r.u32()? as usize;
     let mut natives: [&[u8]; MAX_NATIVE_CONTROLLERS] = [&[]; MAX_NATIVE_CONTROLLERS];
     let native_overflow = native_count > MAX_NATIVE_CONTROLLERS;
     // The loops below advance the arg cursor, so they must run for the full
     // on-wire count even when it exceeds the storable maximum.
     #[allow(clippy::needless_range_loop)]
     for i in 0..native_count {
-        let key = ix_read_bytes(args, &mut off, 32)?;
+        let key = r.bytes(32)?;
         if !native_overflow {
             natives[i] = key;
         }
     }
-    let other_count = ix_read_u32(args, &mut off)? as usize;
+    let other_count = r.u32()? as usize;
     let mut others: [&[u8]; MAX_OTHER_CONTROLLERS] = [&[]; MAX_OTHER_CONTROLLERS];
     let other_overflow = other_count > MAX_OTHER_CONTROLLERS;
     #[allow(clippy::needless_range_loop)]
     for i in 0..other_count {
-        let s = ix_read_str(args, &mut off)?;
+        let s = r.str()?;
         if !other_overflow {
             others[i] = s;
         }
     }
-    ix_finish(args, off)?;
-    let new_sections_len = off;
-    let signer_key: &[u8] = authority.address().as_ref();
+    let new_sections_len = r.offset();
+    r.finish()?;
+    let signer_key = authority.address().as_array();
 
     let (old_len, tail_start) = {
         let data = did_account.try_borrow()?;
         let s = Sections::parse(&data)?;
-        require_authority(&data, &s, signer_key.try_into().unwrap())?;
+        require_authority(&data, &s, signer_key)?;
         require(
             !native_overflow && !other_overflow,
             DidError::TooManyControllers,

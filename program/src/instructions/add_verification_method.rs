@@ -7,7 +7,13 @@ use pinocchio::{
     AccountView, ProgramResult,
 };
 
-use crate::{error::*, events, instructions::shared::*, state::*};
+use crate::{
+    error::*,
+    events,
+    instructions::shared::*,
+    reader::{Args, Reader},
+    state::*,
+};
 
 pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let [payer, authority, did_account, system_program, ..] = accounts else {
@@ -19,21 +25,21 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let subject = verify_did_account(did_account)?;
 
     // The borsh args are VerificationMethod { fragment, method_type, flags, key_data }.
-    let mut off = 0usize;
-    let fragment = ix_read_str(args, &mut off)?;
-    let method_type = ix_read_u8(args, &mut off)?;
-    let flags = ix_read_u16(args, &mut off)?;
-    let key_data = ix_read_len_prefixed(args, &mut off)?;
-    ix_finish(args, off)?;
+    let mut r = Reader::<Args>::new(args);
+    let fragment = r.str()?;
+    let method_type = r.u8()?;
+    let flags = r.u16()?;
+    let key_data = r.len_prefixed()?;
+    r.finish()?;
     let expected_len = expected_key_len(method_type).ok_or(ProgramError::InvalidInstructionData)?;
 
-    let signer_key: &[u8] = authority.address().as_ref();
+    let signer_key = authority.address().as_array();
     let entry_len = vm_space(fragment.len(), key_data.len());
 
     let (insert_at, old_len, vm_count_pos, vm_count) = {
         let data = did_account.try_borrow()?;
         let s = Sections::parse(&data)?;
-        require_authority(&data, &s, signer_key.try_into().unwrap())?;
+        require_authority(&data, &s, signer_key)?;
         require(
             s.vm_count < MAX_VERIFICATION_METHODS,
             DidError::TooManyVerificationMethods,

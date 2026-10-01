@@ -14,7 +14,12 @@ use pinocchio::{
 };
 use pinocchio_system::instructions::{Allocate, Assign, CreateAccount, Transfer};
 
-use crate::{error::*, instructions::shared::*, state::*};
+use crate::{
+    error::*,
+    instructions::shared::*,
+    reader::{Args, Reader},
+    state::*,
+};
 
 pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let [payer, authority, did_account, key_buffer, system_program, ..] = accounts else {
@@ -29,19 +34,19 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     }
 
     // The borsh args are fragment: String, method_type: u8, flags: u16, key_len: u32.
-    let mut off = 0usize;
-    let fragment = ix_read_str(args, &mut off)?;
-    let method_type = ix_read_u8(args, &mut off)?;
-    let flags = ix_read_u16(args, &mut off)?;
-    let key_len = ix_read_u32(args, &mut off)? as usize;
-    ix_finish(args, off)?;
+    let mut r = Reader::<Args>::new(args);
+    let fragment = r.str()?;
+    let method_type = r.u8()?;
+    let flags = r.u16()?;
+    let key_len = r.u32()? as usize;
+    r.finish()?;
     let expected_len = expected_key_len(method_type).ok_or(ProgramError::InvalidInstructionData)?;
-    let signer_key: &[u8] = authority.address().as_ref();
+    let signer_key = authority.address().as_array();
 
     {
         let data = did_account.try_borrow()?;
         let s = Sections::parse(&data)?;
-        require_authority(&data, &s, signer_key.try_into().unwrap())?;
+        require_authority(&data, &s, signer_key)?;
         require(
             s.vm_count < MAX_VERIFICATION_METHODS,
             DidError::TooManyVerificationMethods,

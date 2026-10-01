@@ -17,9 +17,10 @@ use pinocchio::{
 use pinocchio_system::instructions::Transfer;
 
 use crate::error::{require, DidError};
+use crate::reader::{Account, Args, Reader};
 use crate::state::{
     KeyBufferRef, ACCOUNT_DISCRIMINATOR, BASE_SPACE, DID_SEED, KEY_BUFFER_DISCRIMINATOR,
-    KEY_BUFFER_HEADER, KEY_BUFFER_SEED, OFF_BUMP, OFF_SUBJECT,
+    KEY_BUFFER_HEADER, KEY_BUFFER_SEED, OFF_BUMP,
 };
 
 /// The payer funds rent growth and receives shrink refunds, so it is a writable signer.
@@ -70,8 +71,9 @@ pub fn load_did_account(did_account: &AccountView) -> Result<[u8; 32], ProgramEr
     if data.len() < BASE_SPACE || data[0..8] != ACCOUNT_DISCRIMINATOR {
         return Err(ProgramError::InvalidAccountData);
     }
-    let subject: [u8; 32] = data[OFF_SUBJECT..OFF_SUBJECT + 32].try_into().unwrap();
-    let bump = data[OFF_BUMP];
+    let mut r = Reader::<Account>::at(&data, OFF_BUMP)?;
+    let bump = r.u8()?;
+    let subject = *r.array::<32>()?;
     let expected = Address::create_program_address(&[DID_SEED, &subject, &[bump]], &crate::ID)
         .map_err(|_| ProgramError::InvalidSeeds)?;
     if did_account.address() != &expected {
@@ -160,14 +162,16 @@ pub fn rent_minimum_balance(data_len: usize) -> Result<u64, ProgramError> {
     let mut classic = [0u8; 17];
     match get_sysvar(&mut classic, &RENT_ID, 0) {
         Ok(()) => {
-            let lamports_per_byte_year = u64::from_le_bytes(classic[0..8].try_into().unwrap());
+            let mut r = Reader::<Account>::new(&classic);
+            let lamports_per_byte_year = r.u64()?;
+            let threshold = *r.array::<8>()?;
             let base = bytes
                 .checked_mul(lamports_per_byte_year)
                 .ok_or(ProgramError::ArithmeticOverflow)?;
-            if classic[8..16] == TWO_F64_LE {
+            if threshold == TWO_F64_LE {
                 base.checked_mul(2).ok_or(ProgramError::ArithmeticOverflow)
             } else {
-                let threshold = f64::from_le_bytes(classic[8..16].try_into().unwrap());
+                let threshold = f64::from_le_bytes(threshold);
                 if !(threshold.is_finite() && threshold >= 0.0) {
                     return Err(ProgramError::InvalidArgument);
                 }
@@ -236,64 +240,73 @@ pub fn shrink(
 }
 
 // ---------------------------------------------------------------------------
-// Instruction-argument cursor over the borsh wire format, in borrowed slices
+// Instruction-argument reads, kept for callers of earlier releases
 // ---------------------------------------------------------------------------
 
+#[deprecated(note = "use `reader::Reader`")]
 #[inline(always)]
 pub fn ix_read_bytes<'a>(
     data: &'a [u8],
     off: &mut usize,
     len: usize,
 ) -> Result<&'a [u8], ProgramError> {
-    let bytes = data
-        .get(*off..*off + len)
-        .ok_or(ProgramError::InvalidInstructionData)?;
-    *off += len;
+    let mut r = Reader::<Args>::at(data, *off)?;
+    let bytes = r.bytes(len)?;
+    *off = r.offset();
     Ok(bytes)
 }
 
+#[deprecated(note = "use `reader::Reader`")]
 #[inline(always)]
 pub fn ix_read_u32(data: &[u8], off: &mut usize) -> Result<u32, ProgramError> {
-    Ok(u32::from_le_bytes(
-        ix_read_bytes(data, off, 4)?.try_into().unwrap(),
-    ))
+    let mut r = Reader::<Args>::at(data, *off)?;
+    let value = r.u32()?;
+    *off = r.offset();
+    Ok(value)
 }
 
+#[deprecated(note = "use `reader::Reader`")]
 #[inline(always)]
 pub fn ix_read_u16(data: &[u8], off: &mut usize) -> Result<u16, ProgramError> {
-    Ok(u16::from_le_bytes(
-        ix_read_bytes(data, off, 2)?.try_into().unwrap(),
-    ))
+    let mut r = Reader::<Args>::at(data, *off)?;
+    let value = r.u16()?;
+    *off = r.offset();
+    Ok(value)
 }
 
+#[deprecated(note = "use `reader::Reader`")]
 #[inline(always)]
 pub fn ix_read_u8(data: &[u8], off: &mut usize) -> Result<u8, ProgramError> {
-    Ok(ix_read_bytes(data, off, 1)?[0])
+    let mut r = Reader::<Args>::at(data, *off)?;
+    let value = r.u8()?;
+    *off = r.offset();
+    Ok(value)
 }
 
 /// A borsh `Vec<u8>`, or the byte payload of a `String`.
+#[deprecated(note = "use `reader::Reader`")]
 #[inline(always)]
 pub fn ix_read_len_prefixed<'a>(data: &'a [u8], off: &mut usize) -> Result<&'a [u8], ProgramError> {
-    let len = ix_read_u32(data, off)? as usize;
-    ix_read_bytes(data, off, len)
+    let mut r = Reader::<Args>::at(data, *off)?;
+    let bytes = r.len_prefixed()?;
+    *off = r.offset();
+    Ok(bytes)
 }
 
-/// A borsh `String`, length-prefixed bytes that must be valid UTF-8. Borsh enforces
-/// this, and the check is replicated here so malformed args fail the same way.
+/// A borsh `String`, length-prefixed bytes that must be valid UTF-8.
+#[deprecated(note = "use `reader::Reader`")]
 #[inline(always)]
 pub fn ix_read_str<'a>(data: &'a [u8], off: &mut usize) -> Result<&'a [u8], ProgramError> {
-    let bytes = ix_read_len_prefixed(data, off)?;
-    core::str::from_utf8(bytes).map_err(|_| ProgramError::InvalidInstructionData)?;
+    let mut r = Reader::<Args>::at(data, *off)?;
+    let bytes = r.str()?;
+    *off = r.offset();
     Ok(bytes)
 }
 
 /// The arguments end where the last field ends. Bytes past it are a
 /// malformed encoding, as they are for borsh's `try_from_slice`.
+#[deprecated(note = "use `reader::Reader::finish`")]
 #[inline(always)]
 pub fn ix_finish(data: &[u8], off: usize) -> Result<(), ProgramError> {
-    if off == data.len() {
-        Ok(())
-    } else {
-        Err(ProgramError::InvalidInstructionData)
-    }
+    Reader::<Args>::at(data, off)?.finish()
 }
