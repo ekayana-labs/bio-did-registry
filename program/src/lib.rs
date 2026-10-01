@@ -111,3 +111,55 @@ pub fn process_instruction(
         _ => Err(ProgramError::InvalidInstructionData),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use sha2::{Digest, Sha256};
+
+    use super::*;
+
+    fn prefix(name: &str) -> [u8; 8] {
+        let digest = Sha256::digest(name.as_bytes());
+        let mut out = [0u8; 8];
+        out.copy_from_slice(&digest[..8]);
+        out
+    }
+
+    #[test]
+    fn discriminators_are_hashes_of_their_names() {
+        let instructions = [
+            ("initialize", ix::INITIALIZE),
+            ("add_verification_method", ix::ADD_VERIFICATION_METHOD),
+            ("remove_verification_method", ix::REMOVE_VERIFICATION_METHOD),
+            (
+                "set_verification_method_flags",
+                ix::SET_VERIFICATION_METHOD_FLAGS,
+            ),
+            ("add_service", ix::ADD_SERVICE),
+            ("remove_service", ix::REMOVE_SERVICE),
+            ("set_controllers", ix::SET_CONTROLLERS),
+            ("deactivate", ix::DEACTIVATE),
+            ("create_key_buffer", ix::CREATE_KEY_BUFFER),
+            ("write_key_buffer", ix::WRITE_KEY_BUFFER),
+            (
+                "add_verification_method_from_buffer",
+                ix::ADD_VERIFICATION_METHOD_FROM_BUFFER,
+            ),
+            ("close_key_buffer", ix::CLOSE_KEY_BUFFER),
+            ("initialize_owned", ix::INITIALIZE_OWNED),
+            ("update_service", ix::UPDATE_SERVICE),
+        ];
+        for (i, (name, discriminator)) in instructions.iter().enumerate() {
+            assert_eq!(prefix(&format!("global:{name}")), *discriminator, "{name}");
+            assert!(
+                instructions[..i].iter().all(|(_, d)| d != discriminator),
+                "{name} collides"
+            );
+        }
+        assert_eq!(prefix("account:DidAccount"), state::ACCOUNT_DISCRIMINATOR);
+        assert_eq!(prefix("account:KeyBuffer"), state::KEY_BUFFER_DISCRIMINATOR);
+        assert_eq!(prefix("event:DidInitialized"), events::DID_INITIALIZED);
+        assert_eq!(prefix("event:DidModified"), events::DID_MODIFIED);
+        assert_eq!(prefix("event:DidDeactivated"), events::DID_DEACTIVATED);
+    }
+}
