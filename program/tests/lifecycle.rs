@@ -1122,6 +1122,62 @@ fn test_secp256k1_keys_must_be_compressed() {
 }
 
 #[test]
+fn test_ml_dsa_keys_do_not_agree_keys() {
+    let mut svm = setup();
+    let subject = Keypair::new();
+    svm.airdrop(&subject.pubkey(), AIRDROP).unwrap();
+    let s = subject.pubkey();
+    send(&mut svm, initialize_ix(&s, &s), &subject, &[]).unwrap();
+    let pq_flags = VM_FLAG_ASSERTION | VM_FLAG_KEY_AGREEMENT;
+
+    assert_custom_err(
+        send(
+            &mut svm,
+            add_vm_ix(&s, &s, &s, "pq", VM_TYPE_DILITHIUM5, pq_flags, &[7u8; 2592]),
+            &subject,
+            &[],
+        ),
+        6010,
+        "InvalidFlags (add)",
+    );
+    assert_custom_err(
+        send(
+            &mut svm,
+            create_key_buffer_ix(&s, &s, &s, "pq", VM_TYPE_DILITHIUM5, pq_flags, 2592),
+            &subject,
+            &[],
+        ),
+        6010,
+        "InvalidFlags (key buffer)",
+    );
+    send(
+        &mut svm,
+        add_vm_ix(
+            &s,
+            &s,
+            &s,
+            "pq",
+            VM_TYPE_DILITHIUM5,
+            VM_FLAG_ASSERTION,
+            &[7u8; 2592],
+        ),
+        &subject,
+        &[],
+    )
+    .unwrap();
+    assert_custom_err(
+        send(
+            &mut svm,
+            set_flags_ix(&s, &s, "pq", pq_flags),
+            &subject,
+            &[],
+        ),
+        6010,
+        "InvalidFlags (set_flags)",
+    );
+}
+
+#[test]
 fn test_services_and_controllers() {
     let mut svm = setup();
     let subject = Keypair::new();

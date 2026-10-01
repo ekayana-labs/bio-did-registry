@@ -846,6 +846,7 @@ pub fn require_fragment_free(
 ///   so it is Ed25519 only as well, and it needs capabilityInvocation. A
 ///   protected method without it could never be changed or removed again.
 /// - X25519 is a key-agreement key and cannot sign anything.
+/// - ML-DSA-87 is a signature scheme with no key agreement.
 pub fn validate_vm_flags(method_type: u8, flags: u16) -> Result<(), ProgramError> {
     require(flags & !VM_VALID_MASK == 0, DidError::InvalidFlags)?;
     if flags & (VM_FLAG_CAPABILITY_INVOCATION | VM_FLAG_PROTECTED) != 0 {
@@ -862,6 +863,9 @@ pub fn validate_vm_flags(method_type: u8, flags: u16) -> Result<(), ProgramError
             flags & VM_RELATIONSHIP_MASK & !VM_FLAG_KEY_AGREEMENT == 0,
             DidError::InvalidFlags,
         )?;
+    }
+    if method_type == VM_TYPE_DILITHIUM5 {
+        require(flags & VM_FLAG_KEY_AGREEMENT == 0, DidError::InvalidFlags)?;
     }
     Ok(())
 }
