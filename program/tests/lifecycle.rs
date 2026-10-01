@@ -45,6 +45,7 @@ const VM_FLAGS_DEFAULT: u16 = 0b1_1111 | VM_FLAG_PROTECTED;
 
 const VM_TYPE_ED25519: u8 = 0;
 const VM_TYPE_X25519: u8 = 1;
+const VM_TYPE_SECP256K1: u8 = 2;
 const VM_TYPE_DILITHIUM5: u8 = 3;
 
 const INITIAL_SPACE: usize = 124;
@@ -1065,6 +1066,59 @@ fn test_ed25519_keys_must_be_curve_points() {
     let res = send(&mut svm, remove_vm_ix(&s, &s, &s, "default"), &subject, &[]);
     assert_custom_err(res, 6012, "LastAuthority");
     assert_eq!(decode(&svm, &pda).verification_methods.len(), 1);
+}
+
+#[test]
+fn test_secp256k1_keys_must_be_compressed() {
+    let mut svm = setup();
+    let subject = Keypair::new();
+    svm.airdrop(&subject.pubkey(), AIRDROP).unwrap();
+    let s = subject.pubkey();
+    send(&mut svm, initialize_ix(&s, &s), &subject, &[]).unwrap();
+
+    for prefix in [0x00u8, 0x04, 0xff] {
+        let mut key = [7u8; 33];
+        key[0] = prefix;
+        assert_custom_err(
+            send(
+                &mut svm,
+                add_vm_ix(
+                    &s,
+                    &s,
+                    &s,
+                    "evm",
+                    VM_TYPE_SECP256K1,
+                    VM_FLAG_ASSERTION,
+                    &key,
+                ),
+                &subject,
+                &[],
+            ),
+            6018,
+            &format!("InvalidKey (prefix {prefix:#04x})"),
+        );
+    }
+    for prefix in [0x02u8, 0x03] {
+        let mut key = [7u8; 33];
+        key[0] = prefix;
+        let fragment = format!("evm-{prefix}");
+        send(
+            &mut svm,
+            add_vm_ix(
+                &s,
+                &s,
+                &s,
+                &fragment,
+                VM_TYPE_SECP256K1,
+                VM_FLAG_ASSERTION,
+                &key,
+            ),
+            &subject,
+            &[],
+        )
+        .unwrap();
+    }
+    assert_eq!(decode(&svm, &did_pda(&s)).verification_methods.len(), 3);
 }
 
 #[test]

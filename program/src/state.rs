@@ -568,18 +568,24 @@ pub struct NewMethod<'a> {
 /// - An Ed25519 key must be a curve point. An address off the curve has no
 ///   private key, and only a program can sign for it, through a CPI, so it
 ///   enters only as the signer itself.
+/// - A secp256k1 key is a compressed SEC1 point, which starts with 0x02 or
+///   0x03.
 #[inline(always)]
 pub fn check_new_key(m: &NewMethod, key: &[u8], signer: &[u8; 32]) -> Result<(), ProgramError> {
     if m.flags & VM_FLAG_PROTECTED != 0 {
         require(key == signer, DidError::ProtectedVerificationMethod)?;
     }
-    if m.method_type == VM_TYPE_ED25519 {
-        require(
+    match m.method_type {
+        VM_TYPE_ED25519 => require(
             key == signer || pinocchio::address::bytes_are_curve_point(key),
             DidError::InvalidKey,
-        )?;
+        ),
+        VM_TYPE_SECP256K1 => require(
+            matches!(key.first(), Some(0x02 | 0x03)),
+            DidError::InvalidKey,
+        ),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 /// Appends a verification method entry to a document whose data has already
