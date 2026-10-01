@@ -4,7 +4,6 @@
 //! tombstone never can. The freed rent is refunded to the payer.
 
 use pinocchio::{
-    error::ProgramError,
     sysvars::{clock::Clock, Sysvar},
     AccountView, ProgramResult,
 };
@@ -17,14 +16,13 @@ use crate::{
 };
 
 pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
-    let [payer, authority, did_account, system_program, ..] = accounts else {
-        return Err(ProgramError::NotEnoughAccountKeys);
-    };
+    let Update {
+        payer,
+        authority,
+        did_account,
+        subject,
+    } = Update::try_from(accounts)?;
     Reader::<Args>::new(args).finish()?;
-    check_payer(payer)?;
-    check_authority_signer(authority)?;
-    check_system_program(system_program)?;
-    let subject = verify_did_account(did_account)?;
     let signer_key = authority.address().as_array();
 
     {

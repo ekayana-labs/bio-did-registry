@@ -23,6 +23,38 @@ use crate::state::{
     KEY_BUFFER_HEADER, KEY_BUFFER_SEED, OFF_BUMP,
 };
 
+/// The accounts of an update that may resize the DID document,
+/// `[payer, authority, did_account, system_program]`, after the checks every
+/// such update makes.
+pub struct Update<'a> {
+    pub payer: &'a mut AccountView,
+    pub authority: &'a AccountView,
+    pub did_account: &'a mut AccountView,
+    /// The DID's subject, which the events name.
+    pub subject: [u8; 32],
+}
+
+impl<'a> TryFrom<&'a mut [AccountView]> for Update<'a> {
+    type Error = ProgramError;
+
+    #[inline(always)]
+    fn try_from(accounts: &'a mut [AccountView]) -> Result<Self, ProgramError> {
+        let [payer, authority, did_account, system_program, ..] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+        check_payer(payer)?;
+        check_authority_signer(authority)?;
+        check_system_program(system_program)?;
+        let subject = verify_did_account(did_account)?;
+        Ok(Self {
+            payer,
+            authority,
+            did_account,
+            subject,
+        })
+    }
+}
+
 /// The payer funds rent growth and receives shrink refunds, so it is a writable signer.
 #[inline]
 pub fn check_payer(payer: &AccountView) -> Result<(), ProgramError> {

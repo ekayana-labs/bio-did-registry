@@ -2,7 +2,6 @@
 //! The account shrinks and the freed rent is refunded to the payer.
 
 use pinocchio::{
-    error::ProgramError,
     sysvars::{clock::Clock, Sysvar},
     AccountView, ProgramResult,
 };
@@ -16,13 +15,12 @@ use crate::{
 };
 
 pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
-    let [payer, authority, did_account, system_program, ..] = accounts else {
-        return Err(ProgramError::NotEnoughAccountKeys);
-    };
-    check_payer(payer)?;
-    check_authority_signer(authority)?;
-    check_system_program(system_program)?;
-    let subject = verify_did_account(did_account)?;
+    let Update {
+        payer,
+        authority,
+        did_account,
+        subject,
+    } = Update::try_from(accounts)?;
 
     let mut r = Reader::<Args>::new(args);
     let fragment = r.str()?;
