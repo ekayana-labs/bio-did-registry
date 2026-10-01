@@ -1541,6 +1541,182 @@ fn test_controllers_replacement_grows_and_shrinks() {
 }
 
 #[test]
+fn test_a_full_document_holds_every_limit() {
+    let mut svm = setup();
+    let subject = Keypair::new();
+    svm.airdrop(&subject.pubkey(), 100_000_000_000).unwrap();
+    let s = subject.pubkey();
+    let pda = did_pda(&s);
+    send(&mut svm, initialize_ix(&s, &s), &subject, &[]).unwrap();
+    let send_ok = |svm: &mut LiteSVM, ix: Instruction| send(svm, ix, &subject, &[]).unwrap();
+
+    // Fifteen post-quantum keys next to the founding one make sixteen methods.
+    for i in 0..15u8 {
+        send_ok(
+            &mut svm,
+            add_vm_ix(
+                &s,
+                &s,
+                &s,
+                &format!("pq-{i}"),
+                VM_TYPE_DILITHIUM5,
+                VM_FLAG_ASSERTION,
+                &[i; 2592],
+            ),
+        );
+    }
+    assert_custom_err(
+        send(
+            &mut svm,
+            add_vm_ix(
+                &s,
+                &s,
+                &s,
+                "one-more",
+                VM_TYPE_ED25519,
+                VM_FLAG_AUTHENTICATION,
+                Keypair::new().pubkey().as_ref(),
+            ),
+            &subject,
+            &[],
+        ),
+        6006,
+        "TooManyVerificationMethods",
+    );
+    assert_custom_err(
+        send(
+            &mut svm,
+            create_key_buffer_ix(
+                &s,
+                &s,
+                &s,
+                "one-more",
+                VM_TYPE_DILITHIUM5,
+                VM_FLAG_ASSERTION,
+                2592,
+            ),
+            &subject,
+            &[],
+        ),
+        6006,
+        "TooManyVerificationMethods (key buffer)",
+    );
+
+    // Sixteen services of the longest type and endpoint.
+    let service_type = "T".repeat(64);
+    let endpoint = format!("https://{}", "e".repeat(504));
+    for i in 0..16 {
+        send_ok(
+            &mut svm,
+            add_service_ix(&s, &s, &s, &format!("svc-{i}"), &service_type, &endpoint),
+        );
+    }
+    assert_custom_err(
+        send(
+            &mut svm,
+            add_service_ix(&s, &s, &s, "one-more", "T", "e"),
+            &subject,
+            &[],
+        ),
+        6007,
+        "TooManyServices",
+    );
+
+    // Eight native controllers and eight external ones of the longest form.
+    let natives: Vec<Pubkey> = (0..8).map(|_| Keypair::new().pubkey()).collect();
+    let externals: Vec<String> = (0..8)
+        .map(|i| format!("did:web:{}{i}", "c".repeat(119)))
+        .collect();
+    let externals: Vec<&str> = externals.iter().map(String::as_str).collect();
+    assert!(externals.iter().all(|c| c.len() == 128));
+    send_ok(
+        &mut svm,
+        set_controllers_ix(&s, &s, &s, &natives, &externals),
+    );
+
+    let did = decode(&svm, &pda);
+    assert_eq!(did.verification_methods.len(), 16);
+    assert_eq!(did.services.len(), 16);
+    assert_eq!(did.native_controllers.len(), 8);
+    assert_eq!(did.other_controllers.len(), 8);
+    let account = svm.get_account(&pda).unwrap();
+    assert_eq!(account.data.len(), 50_040);
+    assert_eq!(
+        account.lamports,
+        svm.minimum_balance_for_rent_exemption(50_040)
+    );
+
+    // Names that are not there, on every path that looks one up.
+    assert_custom_err(
+        send(&mut svm, remove_vm_ix(&s, &s, &s, "missing"), &subject, &[]),
+        6004,
+        "VerificationMethodNotFound (remove)",
+    );
+    assert_custom_err(
+        send(
+            &mut svm,
+            set_flags_ix(&s, &s, "missing", VM_FLAG_ASSERTION),
+            &subject,
+            &[],
+        ),
+        6004,
+        "VerificationMethodNotFound (set_flags)",
+    );
+    assert_custom_err(
+        send(
+            &mut svm,
+            remove_service_ix(&s, &s, &s, "missing"),
+            &subject,
+            &[],
+        ),
+        6005,
+        "ServiceNotFound (remove)",
+    );
+
+    // Edits in the middle of a full document move everything after them
+    // and leave it intact.
+    send_ok(&mut svm, remove_vm_ix(&s, &s, &s, "pq-0"));
+    send_ok(&mut svm, remove_service_ix(&s, &s, &s, "svc-0"));
+    send_ok(
+        &mut svm,
+        add_vm_ix(
+            &s,
+            &s,
+            &s,
+            "pq-0",
+            VM_TYPE_DILITHIUM5,
+            VM_FLAG_ASSERTION,
+            &[99u8; 2592],
+        ),
+    );
+    send_ok(&mut svm, add_service_ix(&s, &s, &s, "svc-0", "T", "e"));
+    let did = decode(&svm, &pda);
+    let fragments: Vec<&str> = did
+        .verification_methods
+        .iter()
+        .map(|vm| vm.fragment.as_str())
+        .collect();
+    assert_eq!(fragments[0], "default");
+    assert_eq!(fragments[1], "pq-1");
+    assert_eq!(fragments[15], "pq-0");
+    for (i, vm) in did.verification_methods[1..15].iter().enumerate() {
+        assert_eq!(vm.key_data, vec![i as u8 + 1; 2592]);
+    }
+    assert_eq!(did.verification_methods[15].key_data, vec![99u8; 2592]);
+    assert_eq!(did.services[0].fragment, "svc-1");
+    assert_eq!(did.services[15].endpoint, "e");
+    assert_eq!(did.services[14].endpoint, endpoint);
+    let account = svm.get_account(&pda).unwrap();
+    assert_eq!(
+        account.lamports,
+        svm.minimum_balance_for_rent_exemption(account.data.len())
+    );
+
+    send_ok(&mut svm, deactivate_ix(&s, &s, &s));
+    assert_eq!(account_len(&svm, &pda), TOMBSTONE_SPACE);
+}
+
+#[test]
 fn test_deactivate_is_permanent_tombstone() {
     let mut svm = setup();
     let subject = Keypair::new();
