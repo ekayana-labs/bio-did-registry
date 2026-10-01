@@ -1,7 +1,7 @@
-//! Replace the controller sets (authority required). The two borsh vectors
-//! in the instruction args are byte identical to their on-chain form, so
-//! after validation they are copied in verbatim and the tail (verification
-//! methods + services) is shifted by the size delta.
+//! Replace the controller sets under an authority's signature. The two borsh
+//! vectors in the instruction args are byte identical to their on-chain form, so
+//! after validation they are copied in verbatim. The tail, which holds the
+//! verification methods and services, is shifted by the size delta.
 
 use pinocchio::{
     error::ProgramError,
@@ -20,15 +20,15 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     check_system_program(system_program)?;
     let subject = verify_did_account(did_account)?;
 
-    // Borsh args: native_controllers: Vec<Pubkey>, other_controllers: Vec<String>.
-    // Structural parse into stack-bounded slices; the count limits are
-    // enforced below the authority check so error precedence stays stable.
+    // The borsh args are native_controllers: Vec<Pubkey> and other_controllers:
+    // Vec<String>, parsed structurally into stack-bounded slices. The count limits
+    // are enforced below the authority check so error precedence stays stable.
     let mut off = 0usize;
     let native_count = ix_read_u32(args, &mut off)? as usize;
     let mut natives: [&[u8]; MAX_NATIVE_CONTROLLERS] = [&[]; MAX_NATIVE_CONTROLLERS];
     let native_overflow = native_count > MAX_NATIVE_CONTROLLERS;
-    // The loops below must run for the full on-wire count (they advance the
-    // arg cursor), even when the count exceeds the storable maximum.
+    // The loops below advance the arg cursor, so they must run for the full
+    // on-wire count even when it exceeds the storable maximum.
     #[allow(clippy::needless_range_loop)]
     for i in 0..native_count {
         let key = ix_read_bytes(args, &mut off, 32)?;
@@ -64,7 +64,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
             require(!natives[..i].contains(key), DidError::InvalidController)?;
         }
         for (i, c) in others[..other_count].iter().enumerate() {
-            // did:bio controllers must use the native (pubkey) form;
+            // did:bio controllers must use the native pubkey form, and
             // everything else must be a DID of some other method.
             require(valid_external_controller(c), DidError::InvalidController)?;
             require(!others[..i].contains(c), DidError::InvalidController)?;

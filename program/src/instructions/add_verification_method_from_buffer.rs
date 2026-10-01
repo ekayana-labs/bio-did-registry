@@ -3,7 +3,7 @@
 //! The rules of `add_verification_method` apply unchanged, evaluated
 //! against the DID's state now rather than when the buffer was opened.
 //!
-//! ABI: [payer, authority, did_account, key_buffer, system_program]
+//! The accounts are `[payer, authority, did_account, key_buffer, system_program]`.
 
 use pinocchio::{
     error::ProgramError,

@@ -1,5 +1,5 @@
-//! Remove a service endpoint by fragment (authority required). Shrinks the
-//! account; the freed rent is refunded to the payer.
+//! Remove a service endpoint by fragment under an authority's signature.
+//! The account shrinks and the freed rent is refunded to the payer.
 
 use pinocchio::{
     error::ProgramError,

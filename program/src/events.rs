@@ -1,8 +1,8 @@
-//! Events, emitted through the `sol_log_data` syscall: an 8-byte event
-//! discriminator (sha256("event:<Name>")[..8]) followed by the
+//! Events, emitted through the `sol_log_data` syscall. Each one is an 8-byte
+//! event discriminator, `sha256("event:<Name>")[..8]`, followed by the
 //! borsh-encoded fields, so indexers can subscribe via `Program data:` logs.
 //!
-//! All three events share the same body: `{ did_account, subject, version }`.
+//! All three events share the body `{ did_account, subject, version }`.
 
 use pinocchio::Address;
 
@@ -10,7 +10,7 @@ pub const DID_INITIALIZED: [u8; 8] = [125, 40, 26, 220, 241, 180, 151, 84];
 pub const DID_MODIFIED: [u8; 8] = [127, 241, 158, 225, 33, 224, 88, 208];
 pub const DID_DEACTIVATED: [u8; 8] = [6, 124, 31, 30, 191, 92, 197, 57];
 
-/// Emit one event: discriminator + did_account + subject + version.
+/// Emit one event with the discriminator, did_account, subject and version.
 pub fn emit(discriminator: &[u8; 8], did_account: &Address, subject: &[u8; 32], version: u64) {
     let mut buf = [0u8; 80];
     buf[0..8].copy_from_slice(discriminator);

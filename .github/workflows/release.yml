@@ -27,7 +27,7 @@ jobs:
           version=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages[] | select(.name == "bio-did-registry") | .version')
           test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != crate v$version"; exit 1; }
-          # The first release is published by hand; skip versions crates.io already has.
+          # Skip versions crates.io already has, such as a release published by hand.
           if curl -sf -A "release.yml (github.com/ekayana-labs/bio-did-registry)" \
                "https://crates.io/api/v1/crates/bio-did-registry/$version" -o /dev/null; then
             echo "published=true" >> "$GITHUB_OUTPUT"; echo "bio-did-registry $version is already on crates.io; nothing to do"

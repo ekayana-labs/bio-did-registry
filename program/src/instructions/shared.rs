@@ -1,13 +1,13 @@
 //! Account validation and rent plumbing shared by the mutating instructions.
 //!
-//! ABI:
-//!   realloc-family instructions: [payer, authority, did_account, system_program]
-//!   set_verification_method_flags: [authority, did_account]
-//!   initialize: [payer, did_account, system_program]
-//!   create_key_buffer, add_verification_method_from_buffer:
-//!     [payer, authority, did_account, key_buffer, system_program]
-//!   write_key_buffer: [authority, key_buffer]
-//!   close_key_buffer: [payer, authority, key_buffer]
+//! The account order of each instruction follows.
+//! - Realloc-family instructions take `[payer, authority, did_account, system_program]`.
+//! - `set_verification_method_flags` takes `[authority, did_account]`.
+//! - `initialize` takes `[payer, did_account, system_program]`.
+//! - `create_key_buffer` and `add_verification_method_from_buffer` take
+//!   `[payer, authority, did_account, key_buffer, system_program]`.
+//! - `write_key_buffer` takes `[authority, key_buffer]`.
+//! - `close_key_buffer` takes `[payer, authority, key_buffer]`.
 
 use pinocchio::{
     error::ProgramError,
@@ -22,7 +22,7 @@ use crate::state::{
     KEY_BUFFER_HEADER, KEY_BUFFER_SEED, OFF_BUMP, OFF_SUBJECT,
 };
 
-/// The payer funds rent growth and receives shrink refunds: signer + writable.
+/// The payer funds rent growth and receives shrink refunds, so it is a writable signer.
 #[inline]
 pub fn check_payer(payer: &AccountView) -> Result<(), ProgramError> {
     if !payer.is_signer() {
@@ -50,8 +50,8 @@ pub fn check_system_program(system_program: &AccountView) -> Result<(), ProgramE
     Ok(())
 }
 
-/// Loads an existing `DidAccount` for mutation: everything
-/// [`load_did_account`] checks, plus the account must be writable.
+/// Loads an existing `DidAccount` for mutation. It checks everything
+/// [`load_did_account`] checks, and that the account is writable.
 pub fn verify_did_account(did_account: &AccountView) -> Result<[u8; 32], ProgramError> {
     if !did_account.is_writable() {
         return Err(ProgramError::Immutable);
@@ -59,9 +59,9 @@ pub fn verify_did_account(did_account: &AccountView) -> Result<[u8; 32], Program
     load_did_account(did_account)
 }
 
-/// Loads an existing `DidAccount` read-only: owned by this program, carrying
-/// the `DidAccount` discriminator, at the PDA ["bio-did", subject] with the
-/// stored bump. Returns the subject key (needed for events).
+/// Loads an existing `DidAccount` read-only. It must be owned by this program,
+/// carry the `DidAccount` discriminator and sit at the PDA ["bio-did", subject]
+/// with the stored bump. Returns the subject, which the events need.
 pub fn load_did_account(did_account: &AccountView) -> Result<[u8; 32], ProgramError> {
     if !did_account.owned_by(&crate::ID) {
         return Err(ProgramError::InvalidAccountOwner);
@@ -80,10 +80,10 @@ pub fn load_did_account(did_account: &AccountView) -> Result<[u8; 32], ProgramEr
     Ok(subject)
 }
 
-/// Loads an existing `KeyBuffer`: writable, owned by this program, carrying
-/// the `KeyBuffer` discriminator, bound to `authority` (and to `did_account`
-/// when given), at the PDA ["bio-did-key", did_account, authority] with the
-/// stored bump.
+/// Loads an existing `KeyBuffer`. The account must be writable, owned by
+/// this program, carry the `KeyBuffer` discriminator, be bound to
+/// `authority`, and to `did_account` when one is given, and sit at the PDA
+/// ["bio-did-key", did_account, authority] with the stored bump.
 pub fn verify_key_buffer(
     key_buffer: &AccountView,
     authority: &Address,
@@ -92,7 +92,7 @@ pub fn verify_key_buffer(
     check_key_buffer(key_buffer, authority, did_account).map(|_| ())
 }
 
-/// [`verify_key_buffer`], also returning how far the upload has come:
+/// [`verify_key_buffer`], also returning how far the upload has come as
 /// `(written, key_len)`.
 pub(crate) fn check_key_buffer(
     key_buffer: &AccountView,
@@ -141,16 +141,16 @@ pub fn close_to(account: &mut AccountView, payer: &mut AccountView) -> Result<()
 
 /// Rent-exempt minimum for `data_len`, read from the rent sysvar.
 ///
-/// Handles both sysvar layouts: the classic 17-byte
-/// `{ lamports_per_byte_year: u64, exemption_threshold: f64, burn_percent: u8 }`
-/// (current clusters) and the condensed 8-byte `{ lamports_per_byte: u64 }`
-/// that `pinocchio::sysvars::rent::Rent` assumes. Relying on pinocchio's
-/// `Rent::get()` alone under-funds by the exemption threshold (2x) on
-/// classic-layout runtimes.
+/// Handles both sysvar layouts. Current clusters use the classic 17-byte
+/// `{ lamports_per_byte_year: u64, exemption_threshold: f64, burn_percent: u8 }`,
+/// and `pinocchio::sysvars::rent::Rent` assumes the condensed 8-byte
+/// `{ lamports_per_byte: u64 }`. Relying on pinocchio's `Rent::get()` alone
+/// under-funds by the exemption threshold on a classic-layout runtime whose
+/// threshold is 2.0.
 pub fn rent_minimum_balance(data_len: usize) -> Result<u64, ProgramError> {
     const ACCOUNT_STORAGE_OVERHEAD: u64 = 128;
-    // f64 2.0 in little-endian IEEE-754; compared bitwise to avoid float ops
-    // on the (universal) default-threshold path.
+    // f64 2.0 in little-endian IEEE-754. Comparing the bits avoids float ops
+    // when the threshold is 2.0.
     const TWO_F64_LE: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0x40];
 
     let bytes = ACCOUNT_STORAGE_OVERHEAD
@@ -174,7 +174,7 @@ pub fn rent_minimum_balance(data_len: usize) -> Result<u64, ProgramError> {
                 Ok((base as f64 * threshold) as u64)
             }
         }
-        // Sysvar shorter than 17 bytes: the condensed layout.
+        // A sysvar shorter than 17 bytes has the condensed layout.
         Err(ProgramError::InvalidArgument) => {
             let mut condensed = [0u8; 8];
             get_sysvar(&mut condensed, &RENT_ID, 0)?;
@@ -186,9 +186,9 @@ pub fn rent_minimum_balance(data_len: usize) -> Result<u64, ProgramError> {
     }
 }
 
-/// Rent settlement: after a resize to `new_len`, the account holds exactly
-/// the rent-exempt minimum - growth is funded by the payer (system
-/// transfer), shrinkage is refunded to the payer.
+/// Settles rent so that after a resize to `new_len` the account holds
+/// exactly the rent-exempt minimum. The payer funds growth through a system
+/// transfer and receives the refund when the account shrinks.
 pub fn settle_rent(
     did_account: &mut AccountView,
     payer: &mut AccountView,
@@ -215,7 +215,7 @@ pub fn settle_rent(
     Ok(())
 }
 
-/// Grow the account: fund the new rent minimum, then extend the data.
+/// Grow the account by funding the new rent minimum, then extending the data.
 pub fn grow(
     did_account: &mut AccountView,
     payer: &mut AccountView,
@@ -225,7 +225,7 @@ pub fn grow(
     did_account.resize(new_len)
 }
 
-/// Shrink the account (data already compacted): truncate, then refund.
+/// Shrink the already compacted account by truncating it, then refunding.
 pub fn shrink(
     did_account: &mut AccountView,
     payer: &mut AccountView,
@@ -236,7 +236,7 @@ pub fn shrink(
 }
 
 // ---------------------------------------------------------------------------
-// Instruction-argument cursor (borsh wire format, borrowed slices)
+// Instruction-argument cursor over the borsh wire format, in borrowed slices
 // ---------------------------------------------------------------------------
 
 #[inline(always)]
@@ -271,15 +271,15 @@ pub fn ix_read_u8(data: &[u8], off: &mut usize) -> Result<u8, ProgramError> {
     Ok(ix_read_bytes(data, off, 1)?[0])
 }
 
-/// Borsh `Vec<u8>` / byte payload of a `String`.
+/// A borsh `Vec<u8>`, or the byte payload of a `String`.
 #[inline(always)]
 pub fn ix_read_len_prefixed<'a>(data: &'a [u8], off: &mut usize) -> Result<&'a [u8], ProgramError> {
     let len = ix_read_u32(data, off)? as usize;
     ix_read_bytes(data, off, len)
 }
 
-/// Borsh `String`: length-prefixed bytes that must be valid UTF-8 (borsh
-/// enforces this; we replicate it so malformed args fail the same way).
+/// A borsh `String`, length-prefixed bytes that must be valid UTF-8. Borsh enforces
+/// this, and the check is replicated here so malformed args fail the same way.
 #[inline(always)]
 pub fn ix_read_str<'a>(data: &'a [u8], off: &mut usize) -> Result<&'a [u8], ProgramError> {
     let bytes = ix_read_len_prefixed(data, off)?;
@@ -287,7 +287,7 @@ pub fn ix_read_str<'a>(data: &'a [u8], off: &mut usize) -> Result<&'a [u8], Prog
     Ok(bytes)
 }
 
-/// The arguments end where the last field ends: bytes past it are a
+/// The arguments end where the last field ends. Bytes past it are a
 /// malformed encoding, as they are for borsh's `try_from_slice`.
 #[inline(always)]
 pub fn ix_finish(data: &[u8], off: usize) -> Result<(), ProgramError> {

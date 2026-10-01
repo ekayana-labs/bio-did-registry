@@ -1,9 +1,5 @@
 name: scorecard
 
-# OpenSSF Scorecard: rates the repository's supply chain posture (pinned
-# dependencies, branch protection, token permissions, signed releases) and
-# publishes the result behind the README badge.
-
 on:
   push:
     branches: [main]

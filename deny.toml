@@ -1,5 +1,6 @@
-# cargo-deny policy: security advisories, licenses, duplicate versions and
-# dependency sources. CI runs it on every push; locally: `cargo deny check`.
+# The cargo-deny policy for advisories, licenses, duplicate versions and
+# dependency sources. CI runs it on every push, and `cargo deny check` runs
+# it locally.
 
 [graph]
 all-features = true
@@ -8,8 +9,8 @@ all-features = true
 version = 2
 yanked = "deny"
 # Vulnerabilities anywhere in the tree fail the check. Unmaintained crates
-# only fail when they are direct dependencies; the Solana test stack pulls
-# several transitively that nobody downstream can replace.
+# only fail when they are direct dependencies. The Solana test stack pulls
+# in several that nobody downstream can replace.
 unmaintained = "workspace"
 ignore = []
 
@@ -31,8 +32,7 @@ allow = [
   "OpenSSL",
 ]
 confidence-threshold = 0.8
-# The list above is the policy, not an inventory: a permissive license that
-# nothing currently uses is not a finding.
+# A license on the list above that no dependency uses yet raises no warning.
 unused-allowed-license = "allow"
 
 [bans]

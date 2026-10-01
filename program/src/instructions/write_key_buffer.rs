@@ -2,7 +2,7 @@
 //! order, each continuing exactly where the previous one ended, so the
 //! buffer never has holes and `written` is always a prefix of the key.
 //!
-//! ABI: [authority, key_buffer]
+//! The accounts are `[authority, key_buffer]`.
 
 use pinocchio::{error::ProgramError, AccountView, ProgramResult};
 
@@ -15,7 +15,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     check_authority_signer(authority)?;
     let (written, key_len) = check_key_buffer(key_buffer, authority.address(), None)?;
 
-    // Borsh args: offset: u32, chunk: Vec<u8>
+    // The borsh arguments are offset: u32 and chunk: Vec<u8>.
     let mut off = 0usize;
     let offset = ix_read_u32(args, &mut off)? as usize;
     let chunk = ix_read_len_prefixed(args, &mut off)?;

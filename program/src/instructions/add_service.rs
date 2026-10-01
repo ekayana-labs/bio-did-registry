@@ -1,5 +1,5 @@
-//! Add a service endpoint (authority required). Services live at the tail of
-//! the account, so this is a pure append - no bytes move.
+//! Add a service endpoint under an authority's signature. Services live at
+//! the tail of the account, so this is a pure append and no bytes move.
 
 use pinocchio::{
     error::ProgramError,
@@ -18,7 +18,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     check_system_program(system_program)?;
     let subject = verify_did_account(did_account)?;
 
-    // Borsh args: Service { fragment, service_type, endpoint }
+    // The borsh arguments are Service { fragment, service_type, endpoint }.
     let mut off = 0usize;
     let fragment = ix_read_str(args, &mut off)?;
     let service_type = ix_read_str(args, &mut off)?;

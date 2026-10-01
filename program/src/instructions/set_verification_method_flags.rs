@@ -1,5 +1,5 @@
-//! Replace the relationship/property flags of a verification method.
-//! The only mutation that never resizes: ABI is [authority, did_account].
+//! Replace the relationship and property flags of a verification method. It is
+//! the only mutation that never resizes, so it takes `[authority, did_account]`.
 
 use pinocchio::{
     error::ProgramError,
@@ -40,7 +40,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         let (flags_pos, old_flags, method_type, is_own_key) =
             found.ok_or(DidError::VerificationMethodNotFound)?;
 
-        // Changing a protected method, or granting/revoking protection,
+        // Changing a protected method, or granting or revoking protection,
         // requires the method's own key as authority.
         if (old_flags | new_flags) & VM_FLAG_PROTECTED != 0 {
             require(is_own_key, DidError::ProtectedVerificationMethod)?;

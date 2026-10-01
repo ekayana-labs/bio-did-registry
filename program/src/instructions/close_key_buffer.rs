@@ -3,7 +3,7 @@
 //! an abandoned upload can be reclaimed even after the DID was deactivated
 //! or the authority was rotated out.
 //!
-//! ABI: [payer, authority, key_buffer]
+//! The accounts are `[payer, authority, key_buffer]`.
 
 use pinocchio::{error::ProgramError, AccountView, ProgramResult};
 

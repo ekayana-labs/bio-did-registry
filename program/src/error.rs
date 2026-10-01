@@ -1,6 +1,6 @@
 //! Domain errors, surfaced as custom program error codes starting at 6000.
-//! The numbering is part of the frozen wire format that clients rely on;
-//! new codes are only ever appended.
+//! The numbering is part of the frozen wire format that clients rely on,
+//! and new codes are only ever appended.
 
 use pinocchio::error::ProgramError;
 

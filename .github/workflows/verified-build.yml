@@ -1,10 +1,5 @@
 name: verified build
 
-# Reproduces the program binary with solana-verify in its fixed container,
-# records the hash next to the hash currently deployed on devnet, attests
-# the artifact's provenance, and attaches it to the GitHub release of the
-# tag. Run it by hand from the Actions tab to rehearse before tagging.
-
 on:
   push:
     tags: ["v*"]

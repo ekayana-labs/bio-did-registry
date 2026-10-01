@@ -1,5 +1,5 @@
-//! Remove a verification method by fragment (authority required). Shrinks
-//! the account; the freed rent is refunded to the payer.
+//! Remove a verification method by fragment under an authority's signature.
+//! The account shrinks and the freed rent is refunded to the payer.
 
 use pinocchio::{
     error::ProgramError,
@@ -50,7 +50,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         if flags & VM_FLAG_PROTECTED != 0 {
             require(is_own_key, DidError::ProtectedVerificationMethod)?;
         }
-        // Never orphan the DID: at least one capabilityInvocation Ed25519
+        // Never orphan the DID. At least one capabilityInvocation Ed25519
         // key must survive the removal.
         if removes_authority {
             require(authority_count(&data, &s)? > 1, DidError::LastAuthority)?;

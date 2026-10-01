@@ -1,5 +1,5 @@
-//! Add a verification method (authority required). Grows the account by the
-//! entry's exact size, funded by the payer.
+//! Add a verification method under an authority's signature. The account
+//! grows by the entry's exact size, funded by the payer.
 
 use pinocchio::{
     error::ProgramError,
@@ -18,7 +18,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     check_system_program(system_program)?;
     let subject = verify_did_account(did_account)?;
 
-    // Borsh args: VerificationMethod { fragment, method_type, flags, key_data }
+    // The borsh args are VerificationMethod { fragment, method_type, flags, key_data }.
     let mut off = 0usize;
     let fragment = ix_read_str(args, &mut off)?;
     let method_type = ix_read_u8(args, &mut off)?;

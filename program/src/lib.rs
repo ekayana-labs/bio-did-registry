@@ -1,31 +1,31 @@
-//! bio-did-registry - the Solana verifiable data registry backing the
-//! `did:bio` DID method (W3C DID 1.0).
+//! The Solana verifiable data registry backing the `did:bio` DID method
+//! (W3C DID 1.0).
 //!
-//! One PDA per DID, seeds = `["bio-did", subject]`. Every Ed25519 key is a
-//! resolvable ("generative") DID at zero cost; initializing the on-chain
-//! account unlocks key rotation, additional verification methods (including
-//! post-quantum ML-DSA-87), service endpoints, controllers, and permanent
-//! tombstone deactivation. All mutations require an Ed25519 signature from a
-//! verification method carrying the `capabilityInvocation` relationship.
+//! Each DID has one PDA with the seeds `["bio-did", subject]`. Every Ed25519
+//! key is a resolvable DID at zero cost, through its generative document.
+//! Initializing the on-chain account unlocks key rotation, more verification
+//! methods such as post-quantum ML-DSA-87 keys, service endpoints, controllers
+//! and permanent tombstone deactivation. All mutations require an Ed25519
+//! signature from a method carrying the `capabilityInvocation` relationship.
 //!
-//! Built on [Pinocchio](https://github.com/anza-xyz/pinocchio): accounts are
-//! edited *in place* - the document is never deserialized onto the heap. The
-//! program is `no_std`, allocation-free (`no_allocator!`), and its only
-//! dependencies are the Pinocchio SDK crates.
+//! The program is built on [Pinocchio](https://github.com/anza-xyz/pinocchio).
+//! Accounts are edited in place, and the document is never deserialized onto
+//! the heap. The program is `no_std` and allocation-free (`no_allocator!`),
+//! and its only dependencies are the Pinocchio SDK crates.
 //!
-//! Keys larger than one transaction (ML-DSA-87, 2592 bytes) are uploaded in
-//! chunks into a `KeyBuffer` staging account and appended to the document by
-//! `add_verification_method_from_buffer`; see `state::KeyBufferRef`.
+//! A key larger than one transaction, such as a 2592 byte ML-DSA-87 key, is
+//! uploaded in chunks into a `KeyBuffer` staging account and appended to the
+//! document by `add_verification_method_from_buffer`. See `state::KeyBufferRef`.
 //!
-//! `initialize_owned` creates a DID whose subject is derived by the program
-//! (`["bio-did-owned", authority, nonce]`, off the curve) and controlled by
-//! the signing authority from its first version: one signature names an
-//! asset its owner pays for. Such a DID has no generative document.
+//! `initialize_owned` creates a DID whose subject the program derives from
+//! `["bio-did-owned", authority, nonce]`. The subject is off the curve and the
+//! signing authority controls the DID from its first version, so one signature
+//! names an asset its owner pays for. Such a DID has no generative document.
 //!
-//! The wire format (instruction/account/event discriminators, borsh account
-//! layout, error codes 6000..6017) is frozen and pinned by the golden
-//! vectors in this repository's test suite; deployed resolvers and clients
-//! depend on every byte of it. Additions only ever append.
+//! The wire format is frozen. It covers the instruction, account and event
+//! discriminators, the borsh account layout and the error codes 6000..6017. The
+//! golden vectors in this repository's test suite pin it, and deployed resolvers
+//! and clients depend on every byte of it. Additions only ever append.
 
 #![cfg_attr(target_os = "solana", no_std)]
 
@@ -43,12 +43,12 @@ pinocchio::no_allocator!();
 #[cfg(not(feature = "no-entrypoint"))]
 pinocchio::nostd_panic_handler!();
 
-/// Program ID: H1gnV4GjNT3UV7AgGNUCkSaciuVVtM7hKb8JhPV3Xxy6
+/// The program ID, `H1gnV4GjNT3UV7AgGNUCkSaciuVVtM7hKb8JhPV3Xxy6`.
 pub const ID: Address = Address::new_from_array(five8_const::decode_32_const(
     "H1gnV4GjNT3UV7AgGNUCkSaciuVVtM7hKb8JhPV3Xxy6",
 ));
 
-/// Instruction discriminators: sha256("global:<name>")[..8].
+/// Instruction discriminators, each `sha256("global:<name>")[..8]`.
 pub mod ix {
     pub const INITIALIZE: [u8; 8] = [175, 175, 109, 31, 13, 152, 155, 237];
     pub const ADD_VERIFICATION_METHOD: [u8; 8] = [213, 200, 190, 61, 28, 104, 245, 25];

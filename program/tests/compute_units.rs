@@ -1,13 +1,13 @@
-//! Compute unit report: replays one full DID lifecycle and prints the CU
+//! Compute unit report. It replays one full DID lifecycle and prints the CU
 //! consumed per instruction, asserting a generous ceiling per instruction so
 //! CI catches cost regressions.
 //!
-//! The keys are fixed so the numbers are reproducible: every PDA search
-//! (`initialize`, `initialize_owned` twice, `create_key_buffer`) costs
-//! 1500 CU per rejected bump candidate, which would otherwise make the
-//! report, and the ceiling check, vary from run to run.
+//! The keys are fixed so the numbers are reproducible. Every PDA search
+//! costs 1500 CU per rejected bump candidate, which would otherwise make
+//! the report and the ceiling check vary from run to run. `initialize` and
+//! `create_key_buffer` search once and `initialize_owned` searches twice.
 //!
-//! Run with output: `cargo test --test compute_units -- --nocapture`
+//! Run `cargo test --test compute_units -- --nocapture` to see the output.
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -22,12 +22,12 @@ use solana_transaction::versioned::VersionedTransaction;
 
 const PROGRAM_ID: &str = "H1gnV4GjNT3UV7AgGNUCkSaciuVVtM7hKb8JhPV3Xxy6";
 
-/// Per-instruction ceiling. Measured costs sit at 2-9k CU; a breach of this
-/// bound means something regressed badly.
+/// Per-instruction ceiling. Measured costs sit at 2-9k CU, so a breach of
+/// this bound means something regressed badly.
 const CU_CEILING: u64 = 15_000;
 
-/// Deterministic keys: the subject that signs everything, the rotation key
-/// it adds, and two controller addresses.
+/// Deterministic keys for the subject that signs everything, the rotation
+/// key it adds and two controller addresses.
 fn fixed_keypair(tag: u8) -> Keypair {
     Keypair::new_from_array([tag; 32])
 }
@@ -61,7 +61,7 @@ impl World {
         let so = std::fs::read(
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/deploy/bio_did_registry.so"),
         )
-        .expect("build first: cargo build-sbf --manifest-path program/Cargo.toml");
+        .expect("run cargo build-sbf --manifest-path program/Cargo.toml first");
         let mut svm = LiteSVM::new();
         svm.add_program(program_id(), &so).unwrap();
         let subject = fixed_keypair(1);

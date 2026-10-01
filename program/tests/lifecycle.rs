@@ -1,11 +1,12 @@
 //! LiteSVM integration tests for the did:bio registry program.
 //!
 //! Every instruction is encoded by hand from the wire format and every
-//! account is decoded by an independent parser defined in this file - the
-//! program crate's own types are deliberately not used, so these tests pin
-//! the on-chain format itself, not the implementation's view of it.
+//! account is decoded by an independent parser defined in this file. The
+//! tests use none of the program crate's own types, so they pin the on-chain
+//! format itself rather than the implementation's view of it.
 //!
-//! Build the program first: `cargo build-sbf --manifest-path program/Cargo.toml`
+//! Build the program first with
+//! `cargo build-sbf --manifest-path program/Cargo.toml`.
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -25,7 +26,7 @@ const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
 /// sha256("account:DidAccount")[..8].
 const ACCOUNT_DISCRIMINATOR: [u8; 8] = [77, 88, 239, 141, 251, 29, 237, 243];
 
-// Instruction discriminators (sha256("global:<name>")[..8]).
+// Instruction discriminators, each sha256("global:<name>")[..8].
 const IX_INITIALIZE: [u8; 8] = [175, 175, 109, 31, 13, 152, 155, 237];
 const IX_ADD_VM: [u8; 8] = [213, 200, 190, 61, 28, 104, 245, 25];
 const IX_REMOVE_VM: [u8; 8] = [33, 238, 66, 183, 62, 210, 133, 150];
@@ -62,7 +63,7 @@ fn program_so() -> Vec<u8> {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/deploy/bio_did_registry.so");
     std::fs::read(&path).unwrap_or_else(|_| {
         panic!(
-            "{} not found - run `cargo build-sbf --manifest-path program/Cargo.toml` first",
+            "{} not found, run `cargo build-sbf --manifest-path program/Cargo.toml` first",
             path.display(),
         )
     })
@@ -79,7 +80,7 @@ fn did_pda(subject: &Pubkey) -> Pubkey {
 }
 
 // ---------------------------------------------------------------------------
-// Independent account decoder (wire format per the did:bio method spec)
+// Independent account decoder, following the wire format of the method spec
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq)]
@@ -131,7 +132,7 @@ impl<'a> Cursor<'a> {
 }
 
 /// Parse a DidAccount, asserting the discriminator and that the buffer is
-/// consumed exactly (no trailing bytes: the account is always exact-size).
+/// consumed exactly. The account is always exact-size, so no bytes trail.
 fn parse_did(data: &[u8]) -> Did {
     assert_eq!(data[0..8], ACCOUNT_DISCRIMINATOR, "account discriminator");
     let mut c = Cursor { data, off: 8 };
@@ -347,7 +348,7 @@ fn deactivate_ix(payer: &Pubkey, authority: &Pubkey, subject: &Pubkey) -> Instru
     }
 }
 
-/// Sends one instruction; on failure returns `"{err:?} logs: {logs:?}"`.
+/// Sends one instruction. On failure it returns `"{err:?} logs: {logs:?}"`.
 fn send(
     svm: &mut LiteSVM,
     ix: Instruction,
@@ -363,8 +364,8 @@ fn send_meta(
     payer: &Keypair,
     extra_signers: &[&Keypair],
 ) -> Result<litesvm::types::TransactionMetadata, String> {
-    // A fresh blockhash per send: a retry of an instruction that failed
-    // earlier is then a new transaction, not a rejected duplicate.
+    // Each send uses a fresh blockhash, so a retry of an instruction that
+    // failed earlier is a new transaction rather than a rejected duplicate.
     svm.expire_blockhash();
     let blockhash = svm.latest_blockhash();
     let msg = Message::new_with_blockhash(&[ix], Some(&payer.pubkey()), &blockhash);
@@ -431,7 +432,7 @@ fn test_initialize_creates_generative_default() {
     expected.push(bump);
     expected.extend_from_slice(subject.pubkey().as_ref()); // subject
     expected.push(0); // deactivated
-    expected.extend_from_slice(&account.data[50..58]); // updated_at (clock-dependent)
+    expected.extend_from_slice(&account.data[50..58]); // updated_at, set by the clock
     expected.extend_from_slice(&0u32.to_le_bytes()); // native_controllers
     expected.extend_from_slice(&0u32.to_le_bytes()); // other_controllers
     expected.extend_from_slice(&1u32.to_le_bytes()); // verification_methods
@@ -447,7 +448,7 @@ fn test_initialize_creates_generative_default() {
         "generative account bytes must match the spec layout"
     );
 
-    // Double-initialize must fail (account exists).
+    // A second initialize must fail, since the account exists.
     assert!(send(
         &mut svm,
         initialize_ix(&subject.pubkey(), &subject.pubkey()),
@@ -463,7 +464,7 @@ fn test_initialize_refuses_subjects_that_are_not_keys() {
     let payer = Keypair::new();
     svm.airdrop(&payer.pubkey(), AIRDROP).unwrap();
 
-    // A program-derived address is off the curve: nothing could ever sign
+    // A program-derived address is off the curve. Nothing could ever sign
     // for the document, so the registry refuses to create it.
     let off_curve = owned_subject(&payer.pubkey(), 7);
     assert!(!off_curve.is_on_curve());
@@ -562,8 +563,8 @@ fn test_account_length_must_match_the_layout() {
     send(&mut svm, initialize_ix(&s, &s), &subject, &[]).unwrap();
     let pda = did_pda(&s);
 
-    // A byte the layout does not account for is corruption, not slack:
-    // every mutation refuses the account instead of guessing.
+    // A byte the layout does not account for is corruption, so every
+    // mutation refuses the account instead of guessing.
     let mut account = svm.get_account(&pda).unwrap();
     account.data.push(0);
     svm.set_account(pda, account).unwrap();
@@ -588,7 +589,7 @@ fn test_sponsored_initialize_grants_no_control_to_payer() {
     let subject = Keypair::new();
     svm.airdrop(&sponsor.pubkey(), AIRDROP).unwrap();
 
-    // Sponsor pays; subject never signs.
+    // The sponsor pays and the subject never signs.
     send(
         &mut svm,
         initialize_ix(&sponsor.pubkey(), &subject.pubkey()),
@@ -599,7 +600,7 @@ fn test_sponsored_initialize_grants_no_control_to_payer() {
     let did = decode(&svm, &did_pda(&subject.pubkey()));
     assert_eq!(did.subject, subject.pubkey().to_bytes());
 
-    // Sponsor cannot mutate: not an authority.
+    // The sponsor cannot mutate, since it is not an authority.
     let intruder_key = Keypair::new();
     let res = send(
         &mut svm,
@@ -633,7 +634,8 @@ fn test_add_verification_method_and_validation() {
     let pda = did_pda(&subject.pubkey());
     let s = subject.pubkey();
 
-    // Happy path: rotation key with authentication + capabilityInvocation.
+    // The happy path adds a rotation key with authentication and
+    // capabilityInvocation.
     let rotation = Keypair::new();
     send(
         &mut svm,
@@ -799,7 +801,7 @@ fn test_key_rotation_and_protection() {
     )
     .unwrap();
 
-    // The new authority may NOT remove the protected #default method...
+    // The new authority may not remove the protected #default method.
     let res = send(
         &mut svm,
         remove_vm_ix(&r, &r, &s, "default"),
@@ -808,7 +810,8 @@ fn test_key_rotation_and_protection() {
     );
     assert_custom_err(res, 6011, "ProtectedVerificationMethod");
 
-    // ...but the subject itself may (another authority remains): true rotation.
+    // The subject itself may, since another authority remains. That
+    // completes the rotation.
     send(&mut svm, remove_vm_ix(&s, &s, &s, "default"), &subject, &[]).unwrap();
     let did = decode(&svm, &pda);
     assert_eq!(did.verification_methods.len(), 1);
@@ -831,8 +834,8 @@ fn test_key_rotation_and_protection() {
     );
     assert_custom_err(res, 6000, "Unauthorized");
 
-    // #default named the founding key; nothing else may take the fragment,
-    // neither a method under the new authority nor a service.
+    // #default named the founding key, and nothing else may take the
+    // fragment, neither a method under the new authority nor a service.
     let res = send(
         &mut svm,
         add_vm_ix(
@@ -904,7 +907,7 @@ fn test_set_flags_rules() {
     );
     assert_custom_err(res, 6010, "InvalidFlags");
 
-    // Subject (own key) may adjust its own protected method's relationships.
+    // The subject may adjust the relationships of its own protected method.
     send(
         &mut svm,
         set_flags_ix(
@@ -1099,7 +1102,8 @@ fn test_controllers_replacement_grows_and_shrinks() {
     );
     assert_custom_err(res, 6008, "TooManyControllers");
 
-    // Shrink back to empty; version keeps marching, size returns to initial.
+    // Shrink back to empty. The version keeps counting and the size returns
+    // to the initial one.
     send(
         &mut svm,
         set_controllers_ix(&s, &s, &s, &[], &[]),
@@ -1238,7 +1242,7 @@ fn test_events_wire_format() {
 }
 
 // ---------------------------------------------------------------------------
-// Key buffers: chunked upload of keys larger than one transaction
+// Key buffers, the chunked upload of keys larger than one transaction
 // ---------------------------------------------------------------------------
 
 /// sha256("account:KeyBuffer")[..8].
@@ -1433,8 +1437,8 @@ fn test_key_buffer_uploads_a_large_key() {
     let kb = key_buffer_pda(&s, &s);
     let key: Vec<u8> = (0..2592u32).map(|i| (i * 7 % 251) as u8).collect();
 
-    // Why the buffer exists: the direct instruction cannot be sent to a
-    // cluster, every chunk can.
+    // The buffer exists because the direct instruction cannot be sent to a
+    // cluster, while every chunk can.
     let direct = add_vm_ix(
         &s,
         &s,
@@ -1517,7 +1521,7 @@ fn test_key_buffer_uploads_a_large_key() {
     let buf = decode_key_buffer(&svm, &kb);
     assert_eq!(buf.written, 2592);
     assert_eq!(buf.key, key);
-    // The buffer is full: nothing more fits, and no second buffer can be
+    // The buffer is full, so nothing more fits, and no second buffer can be
     // opened by the same authority for the same DID.
     let res = send(
         &mut svm,
@@ -1542,7 +1546,8 @@ fn test_key_buffer_uploads_a_large_key() {
     );
     assert!(res.unwrap_err().contains("AccountAlreadyInitialized"));
 
-    // Finish: the method lands, the buffer closes, DidModified is emitted.
+    // On finish the method lands, the buffer closes and DidModified is
+    // emitted.
     let meta = send_meta(
         &mut svm,
         add_vm_from_buffer_ix(&s, &s, &pda, &kb),
@@ -1577,7 +1582,7 @@ fn test_key_buffer_uploads_a_large_key() {
     );
     assert!(buffer_gone(&svm, &kb), "buffer closed after finishing");
 
-    // The payer funded the DID growth and fees; the buffer rent came back.
+    // The payer funded the DID growth and fees, and the buffer rent came back.
     let after = svm.get_balance(&s).unwrap();
     let growth = svm.minimum_balance_for_rent_exemption(account_len(&svm, &pda))
         - svm.minimum_balance_for_rent_exemption(INITIAL_SPACE);
@@ -1909,13 +1914,13 @@ fn test_key_buffer_protected_requires_own_key() {
 }
 
 // ---------------------------------------------------------------------------
-// Owned DIDs: program-derived subjects controlled by their creator
+// Owned DIDs, with program-derived subjects controlled by their creator
 // ---------------------------------------------------------------------------
 
 const IX_INITIALIZE_OWNED: [u8; 8] = [51, 133, 240, 229, 41, 137, 108, 91];
 
-/// The subject `initialize_owned(nonce)` derives for `authority`: an
-/// off-curve program address, computed here independently of the crate.
+/// The subject `initialize_owned(nonce)` derives for `authority`, an
+/// off-curve program address computed here independently of the crate.
 fn owned_subject(authority: &Pubkey, nonce: u64) -> Pubkey {
     Pubkey::find_program_address(
         &[b"bio-did-owned", authority.as_ref(), &nonce.to_le_bytes()],
@@ -2023,7 +2028,7 @@ fn test_initialize_owned_creates_a_did_controlled_by_its_authority() {
     expected.extend_from_slice(&0u32.to_le_bytes());
     assert_eq!(account.data, expected, "owned account bytes");
 
-    // The address is taken: neither path may create it again.
+    // The address is taken, so neither path may create it again.
     assert!(send(
         &mut svm,
         initialize_owned_ix(&wallet.pubkey(), &wallet.pubkey(), nonce),
@@ -2077,7 +2082,8 @@ fn test_initialize_owned_requires_the_authority_and_grants_the_payer_nothing() {
     let err = send(&mut svm, wrong, &sponsor, &[&wallet]).unwrap_err();
     assert!(err.contains("InvalidSeeds"), "foreign account: {err}");
 
-    // Sponsored creation: the sponsor pays, the wallet signs and controls.
+    // In a sponsored creation the sponsor pays, and the wallet signs and
+    // controls.
     send(
         &mut svm,
         initialize_owned_ix(&sponsor.pubkey(), &wallet.pubkey(), nonce),
@@ -2151,8 +2157,9 @@ fn test_owned_did_lifecycle_paid_by_its_wallet() {
         "the wallet funded the account"
     );
 
-    // Key rotation from the wallet: a new authority in, the protected
-    // default out (signed by its own key), then the old key is powerless.
+    // The wallet rotates its key. A new authority comes in, the protected
+    // default goes out under its own key's signature, and the old key is
+    // then powerless.
     let next = Keypair::new();
     svm.airdrop(&next.pubkey(), AIRDROP).unwrap();
     send(

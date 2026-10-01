@@ -1,11 +1,11 @@
-//! Open a key buffer: a staging account for a verification method whose key
-//! does not fit in one transaction (ML-DSA-87 is 2592 bytes; a transaction
-//! is 1232). Everything that can be checked without the key material is
-//! checked here, so an upload that cannot succeed fails before any chunk is
-//! sent. The buffer is funded by the payer and bound to the signing
-//! authority: only that key may write, finish, or close it.
+//! Open a key buffer, a staging account for a verification method whose key
+//! does not fit in one transaction. An ML-DSA-87 key is 2592 bytes and a
+//! transaction holds 1232. Everything that can be checked without the key
+//! material is checked here, so an upload that cannot succeed fails before
+//! any chunk is sent. The buffer is funded by the payer and bound to the
+//! signing authority, and only that key may write, finish, or close it.
 //!
-//! ABI: [payer, authority, did_account, key_buffer, system_program]
+//! The accounts are `[payer, authority, did_account, key_buffer, system_program]`.
 
 use pinocchio::{
     cpi::{Seed, Signer},
@@ -28,7 +28,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         return Err(ProgramError::Immutable);
     }
 
-    // Borsh args: fragment: String, method_type: u8, flags: u16, key_len: u32
+    // The borsh args are fragment: String, method_type: u8, flags: u16, key_len: u32.
     let mut off = 0usize;
     let fragment = ix_read_str(args, &mut off)?;
     let method_type = ix_read_u8(args, &mut off)?;
@@ -50,7 +50,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         require_fragment_free(&data, &s, fragment)?;
         require(key_len == expected_len, DidError::InvalidKeyLength)?;
         // Protection is Ed25519 only, so a protected upload is always 32
-        // bytes; whether they are the signer's own is settled on finish.
+        // bytes. Whether they are the signer's own is settled on finish.
         validate_vm_flags(method_type, flags)?;
     }
 
@@ -90,8 +90,8 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         }
         .invoke_signed(&[Signer::from(&seeds)])?;
     } else {
-        // The address was pre-funded: top up to the rent minimum, then
-        // allocate + assign under the PDA signature.
+        // The address was pre-funded. Top up to the rent minimum, then
+        // allocate and assign under the PDA signature.
         let deficit = rent_min.saturating_sub(key_buffer.lamports());
         if deficit > 0 {
             Transfer {

@@ -1,15 +1,16 @@
-# cargo-audit policy for the CI advisories job and the weekly scan
-# (.github/workflows/audit.yml). Vulnerabilities anywhere in the lock file
-# still fail. The entries below are unmaintained-crate notices that reach
-# the tree only through the litesvm test harness (litesvm, agave-syscalls,
-# solana-bpf-loader-program); the program itself depends on nothing but the
+# cargo-audit reads this file in the CI advisories job and in the weekly
+# scan. A vulnerability anywhere in the lock file still fails the check.
+#
+# The entries below are unmaintained-crate notices that reach the tree only
+# through the litesvm test harness, by way of litesvm, agave-syscalls and
+# solana-bpf-loader-program. The program itself depends on nothing but the
 # Pinocchio crates. Revisit the list whenever litesvm moves.
 
 [advisories]
 ignore = [
-  "RUSTSEC-2021-0139", # ansi_term: a direct dependency of litesvm
-  "RUSTSEC-2024-0388", # derivative: ark-ec, via solana-poseidon
-  "RUSTSEC-2024-0436", # paste: ark-ff, via solana-poseidon
-  "RUSTSEC-2025-0141", # bincode 1.x: agave-syscalls
-  "RUSTSEC-2025-0161", # libsecp256k1: agave-syscalls
+  "RUSTSEC-2021-0139", # ansi_term, a direct dependency of litesvm
+  "RUSTSEC-2024-0388", # derivative, through ark-ec and solana-poseidon
+  "RUSTSEC-2024-0436", # paste, through ark-ff and solana-poseidon
+  "RUSTSEC-2025-0141", # bincode 1.x, through agave-syscalls
+  "RUSTSEC-2025-0161", # libsecp256k1, through agave-syscalls
 ]

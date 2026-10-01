@@ -1,7 +1,7 @@
 //! Byte-level view of the `DidAccount` borsh layout.
 //!
-//! Layout (offsets from the start of account data), pinned by the golden
-//! vectors in the test suite:
+//! The golden vectors in the test suite pin this layout. Offsets count from
+//! the start of the account data.
 //!
 //! ```text
 //! 0   [u8; 8]  account discriminator sha256("account:DidAccount")[..8]
@@ -21,22 +21,22 @@
 //!           u32 endpoint_len, endpoint
 //! ```
 //!
-//! The program never deserializes this into owned structures; handlers edit
-//! the buffer in place (`memmove` + patch) after computing spans with
-//! [`Sections::parse`].
+//! The program never deserializes this into owned structures. Handlers
+//! compute spans with [`Sections::parse`], then move and patch the bytes in
+//! place.
 
 use pinocchio::error::ProgramError;
 
 use crate::error::{require, DidError};
 
-/// sha256("account:DidAccount")[..8] - written at initialize, checked on
+/// sha256("account:DidAccount")[..8], written at initialize and checked on
 /// every load.
 pub const ACCOUNT_DISCRIMINATOR: [u8; 8] = [77, 88, 239, 141, 251, 29, 237, 243];
 
-/// PDA seed prefix: ["bio-did", subject].
+/// PDA seed prefix. The seeds are ["bio-did", subject].
 pub const DID_SEED: &[u8] = b"bio-did";
 
-/// Seed prefix of a program-derived ("owned") subject:
+/// Seed prefix of an owned subject, which the program derives as
 /// `find_program_address(["bio-did-owned", authority, nonce_le])`.
 pub const OWNED_SUBJECT_SEED: &[u8] = b"bio-did-owned";
 
@@ -48,8 +48,8 @@ pub fn owned_subject_seeds<'a>(authority: &'a [u8; 32], nonce: &'a [u8; 8]) -> [
 }
 
 /// The owned subject that `initialize_owned(nonce)` signed by `authority`
-/// creates: an off-curve address, so the DID resolves only through the
-/// registry.
+/// creates. The address is off the curve, so the DID resolves only through
+/// the registry.
 pub fn owned_subject(authority: &[u8; 32], nonce: u64) -> [u8; 32] {
     let nonce = nonce.to_le_bytes();
     let (subject, _) = pinocchio::Address::find_program_address(
@@ -59,9 +59,9 @@ pub fn owned_subject(authority: &[u8; 32], nonce: u64) -> [u8; 32] {
     *subject.as_array()
 }
 
-/// The fragment of the founding verification method, written by
-/// `initialize` and `initialize_owned` and never accepted from an
-/// instruction: once that method is gone, `#default` stays gone.
+/// The fragment of the founding verification method. `initialize` and
+/// `initialize_owned` write it and no instruction accepts it, so once that
+/// method is gone, `#default` stays gone.
 pub const DEFAULT_FRAGMENT: &[u8] = b"default";
 
 pub const MAX_VERIFICATION_METHODS: usize = 16;
@@ -74,12 +74,12 @@ pub const MAX_ENDPOINT_LEN: usize = 512;
 pub const MAX_CONTROLLER_LEN: usize = 128;
 #[deprecated(
     since = "0.1.2",
-    note = "the program never reads it; key lengths are fixed per type by expected_key_len"
+    note = "the program never reads it, and expected_key_len fixes key lengths per type"
 )]
 pub const MAX_KEY_DATA_LEN: usize = 2592;
 
-// Verification relationship / property bitflags (low five bits mirror the
-// W3C DID verification relationships).
+// Verification relationship and property bitflags. The low five bits mirror
+// the W3C DID verification relationships.
 pub const VM_FLAG_AUTHENTICATION: u16 = 1 << 0;
 pub const VM_FLAG_ASSERTION: u16 = 1 << 1;
 pub const VM_FLAG_KEY_AGREEMENT: u16 = 1 << 2;
@@ -97,18 +97,18 @@ pub const VM_RELATIONSHIP_MASK: u16 = VM_FLAG_AUTHENTICATION
 
 pub const VM_VALID_MASK: u16 = VM_RELATIONSHIP_MASK | VM_FLAG_PROTECTED;
 
-/// All five relationships plus protection - assigned to the subject's
+/// All five relationships plus protection, assigned to the subject's
 /// initial "default" verification method.
 pub const VM_FLAGS_DEFAULT: u16 = VM_RELATIONSHIP_MASK | VM_FLAG_PROTECTED;
 
-/// Verification method type tags (borsh enum discriminants).
+/// Verification method type tags, the borsh enum discriminants.
 pub const VM_TYPE_ED25519: u8 = 0;
 pub const VM_TYPE_X25519: u8 = 1;
 pub const VM_TYPE_SECP256K1: u8 = 2;
-/// ML-DSA-87 (FIPS 204); the on-chain tag name predates the final standard.
+/// ML-DSA-87 (FIPS 204). The on-chain tag name predates the final standard.
 pub const VM_TYPE_DILITHIUM5: u8 = 3;
 
-/// Expected raw key length per method type; `None` for unknown tags.
+/// Expected raw key length per method type, or `None` for unknown tags.
 #[inline]
 pub fn expected_key_len(method_type: u8) -> Option<usize> {
     match method_type {
@@ -125,12 +125,12 @@ pub const OFF_BUMP: usize = 16;
 pub const OFF_SUBJECT: usize = 17;
 pub const OFF_DEACTIVATED: usize = 49;
 pub const OFF_UPDATED_AT: usize = 50;
-/// Offset of the `native_controllers` count - the first vector section.
+/// Offset of the `native_controllers` count, the first vector section.
 pub const OFF_SECTIONS: usize = 58;
 
-/// Discriminator + scalars + the four vector length prefixes.
+/// The discriminator, the scalars and the four vector length prefixes.
 pub const BASE_SPACE: usize = 8 + 8 + 1 + 32 + 1 + 8 + 4 + 4 + 4 + 4;
-/// The deactivated tombstone (all vectors empty).
+/// The deactivated tombstone, with all vectors empty.
 pub const TOMBSTONE_SPACE: usize = BASE_SPACE;
 /// A fresh account holding only the subject's "default" method.
 pub const INITIAL_SPACE: usize = BASE_SPACE + 4 + DEFAULT_FRAGMENT.len() + 1 + 2 + 4 + 32;
@@ -148,12 +148,12 @@ pub const fn service_space(fragment_len: usize, type_len: usize, endpoint_len: u
 }
 
 // ---------------------------------------------------------------------------
-// Key buffer: staging account for keys larger than one transaction
+// Key buffer, the staging account for keys larger than one transaction
 // ---------------------------------------------------------------------------
 //
 // A 2592 byte ML-DSA-87 key cannot travel in a single 1232 byte transaction,
 // so it is uploaded in chunks into a `KeyBuffer` PDA and then appended to
-// the DID account by `add_verification_method_from_buffer`. Layout:
+// the DID account by `add_verification_method_from_buffer`. The layout follows.
 //
 // ```text
 // 0    [u8; 8]  discriminator sha256("account:KeyBuffer")[..8]
@@ -172,7 +172,7 @@ pub const fn service_space(fragment_len: usize, type_len: usize, endpoint_len: u
 /// sha256("account:KeyBuffer")[..8].
 pub const KEY_BUFFER_DISCRIMINATOR: [u8; 8] = [150, 138, 44, 35, 255, 159, 45, 0];
 
-/// PDA seed prefix: ["bio-did-key", did_account, authority].
+/// PDA seed prefix. The seeds are ["bio-did-key", did_account, authority].
 pub const KEY_BUFFER_SEED: &[u8] = b"bio-did-key";
 
 pub const KB_OFF_DID_ACCOUNT: usize = 8;
@@ -184,7 +184,7 @@ pub const KB_OFF_KEY_LEN: usize = 76;
 pub const KB_OFF_WRITTEN: usize = 80;
 pub const KB_OFF_FRAGMENT_LEN: usize = 84;
 pub const KB_OFF_FRAGMENT: usize = 88;
-/// Offset of the key bytes; also the fixed header size.
+/// Offset of the key bytes, which is also the fixed header size.
 pub const KB_OFF_KEY: usize = KB_OFF_FRAGMENT + MAX_FRAGMENT_LEN;
 pub const KEY_BUFFER_HEADER: usize = KB_OFF_KEY;
 
@@ -271,7 +271,7 @@ pub fn read_bytes<'a>(
     Ok(bytes)
 }
 
-/// Reads a borsh `String`/`Vec<u8>`: u32 length prefix + payload.
+/// Reads a borsh `String` or `Vec<u8>`, a u32 length prefix and then the payload.
 #[inline(always)]
 pub fn read_len_prefixed<'a>(data: &'a [u8], off: &mut usize) -> Result<&'a [u8], ProgramError> {
     let len = read_u32(data, off)? as usize;
@@ -284,7 +284,7 @@ pub fn read_len_prefixed<'a>(data: &'a [u8], off: &mut usize) -> Result<&'a [u8]
 
 /// Offsets of the four vector sections inside the account data, computed by
 /// a single bounds-checked walk. `*_count_pos` is the offset of the u32
-/// count; `*_items` is the offset of the first item byte.
+/// count, and `*_items` is the offset of the first item byte.
 #[derive(Clone, Copy, Debug)]
 pub struct Sections {
     pub nc_count: usize,
@@ -298,16 +298,16 @@ pub struct Sections {
     pub svc_count: usize,
     pub svc_count_pos: usize,
     pub svc_items: usize,
-    /// Total serialized size; always equal to the account data length, since
-    /// [`Sections::parse`] rejects anything shorter or longer.
+    /// Total serialized size. It always equals the account data length,
+    /// since [`Sections::parse`] rejects anything shorter or longer.
     pub end: usize,
 }
 
 impl Sections {
-    /// Walk the vector sections. Expects `data` to be the whole account
-    /// data, starting at the discriminator (which the caller has checked):
-    /// the layout must account for every byte, so handlers can treat `end`
-    /// as the account length when they move the tail.
+    /// Walk the vector sections. `data` is the whole account data, starting
+    /// at the discriminator, which the caller has checked. The layout must
+    /// account for every byte, so handlers can treat `end` as the account
+    /// length when they move the tail.
     pub fn parse(data: &[u8]) -> Result<Self, ProgramError> {
         let mut off = OFF_SECTIONS;
 
@@ -370,7 +370,7 @@ pub struct VmRef<'a> {
     /// Byte span of the whole entry within the account data.
     pub start: usize,
     pub end: usize,
-    /// Offset of the u16 flags field (for in-place patching).
+    /// Offset of the u16 flags field, used for in-place patching.
     pub flags_pos: usize,
 }
 
@@ -440,8 +440,8 @@ pub fn for_each_service<'a>(
 // Domain checks
 // ---------------------------------------------------------------------------
 
-/// True when `signer` may mutate this DID: not deactivated, and the signer
-/// matches an Ed25519 verification method carrying capabilityInvocation.
+/// Checks that `signer` may mutate this DID. It must not be deactivated, and the
+/// signer must match an Ed25519 verification method carrying capabilityInvocation.
 pub fn require_authority(data: &[u8], s: &Sections, signer: &[u8; 32]) -> Result<(), ProgramError> {
     require(data[OFF_DEACTIVATED] == 0, DidError::DidDeactivated)?;
     let mut authorized = false;
@@ -470,8 +470,8 @@ pub fn authority_count(data: &[u8], s: &Sections) -> Result<usize, ProgramError>
     Ok(n)
 }
 
-/// Fragments are unique across verification methods AND services, and
-/// `#default` belongs to the founding method alone.
+/// Fragments are unique across verification methods and services together,
+/// and `#default` belongs to the founding method alone.
 pub fn require_fragment_free(
     data: &[u8],
     s: &Sections,
@@ -498,11 +498,11 @@ pub fn require_fragment_free(
     require(fragment != DEFAULT_FRAGMENT, DidError::InvalidFragment)
 }
 
-/// Flag sanity per key type:
-/// - only known bits may be set;
-/// - capabilityInvocation implies on-chain signing, so Ed25519 only;
-/// - protection is proven by the method's own key signing a transaction,
-///   so it is Ed25519 only as well;
+/// Checks the flags against the key type.
+/// - Only known bits may be set.
+/// - capabilityInvocation implies on-chain signing, so it is Ed25519 only.
+/// - Protection is proven by the method's own key signing a transaction,
+///   so it is Ed25519 only as well.
 /// - X25519 is a key-agreement key and cannot sign anything.
 pub fn validate_vm_flags(method_type: u8, flags: u16) -> Result<(), ProgramError> {
     require(flags & !VM_VALID_MASK == 0, DidError::InvalidFlags)?;
@@ -518,7 +518,7 @@ pub fn validate_vm_flags(method_type: u8, flags: u16) -> Result<(), ProgramError
     Ok(())
 }
 
-/// Fragment charset: 1..=MAX_FRAGMENT_LEN of [A-Za-z0-9_-].
+/// A fragment is 1..=MAX_FRAGMENT_LEN characters of [A-Za-z0-9_-].
 pub fn valid_fragment(fragment: &[u8]) -> bool {
     !fragment.is_empty()
         && fragment.len() <= MAX_FRAGMENT_LEN
@@ -527,15 +527,15 @@ pub fn valid_fragment(fragment: &[u8]) -> bool {
             .all(|&b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-/// Printable ASCII (no whitespace), bounded length.
+/// Printable ASCII without whitespace, of bounded length.
 pub fn valid_uri_ascii(value: &[u8], max_len: usize) -> bool {
     !value.is_empty() && value.len() <= max_len && value.iter().all(|&b| (0x21..=0x7e).contains(&b))
 }
 
 /// An external controller is a DID of another method, `did:<method>:<id>`
-/// as the DID syntax defines it: a lowercase alphanumeric method name and
-/// a non-empty method-specific id, in printable ASCII of bounded length.
-/// did:bio controllers use the native (key) form instead.
+/// as the DID syntax defines it. The method name is lowercase alphanumeric
+/// and the method-specific id is non-empty, in printable ASCII of bounded
+/// length. did:bio controllers use the native key form instead.
 pub fn valid_external_controller(value: &[u8]) -> bool {
     if !valid_uri_ascii(value, MAX_CONTROLLER_LEN) {
         return false;
@@ -555,7 +555,7 @@ pub fn valid_external_controller(value: &[u8]) -> bool {
         && !id.is_empty()
 }
 
-/// Bump `version` (saturating) and stamp `updated_at`.
+/// Bump `version`, saturating, and stamp `updated_at`.
 #[inline]
 pub fn touch(data: &mut [u8], now: i64) {
     let version = u64::from_le_bytes(data[OFF_VERSION..OFF_VERSION + 8].try_into().unwrap());
@@ -573,7 +573,7 @@ pub fn version(data: &[u8]) -> u64 {
 mod owned_subject_tests {
     use super::*;
 
-    /// Pinned across the resolver crate and the backend: the same inputs
+    /// Pinned across the resolver crate and the backend. The same inputs
     /// derive the same subject everywhere, and it is never a key.
     #[test]
     fn owned_subject_golden_vector() {

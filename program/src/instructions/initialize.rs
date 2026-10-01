@@ -1,14 +1,14 @@
 //! Materialize the on-chain account for `did:bio:<base58(subject)>`.
 //!
-//! Permissionless: any payer may create the account (sponsored creation),
-//! but the stored document is exactly the generative default - the subject
-//! key itself is the only verification method and only authority - so a
+//! The instruction is permissionless, so any payer may sponsor the account.
+//! The stored document is exactly the generative default, in which the
+//! subject key is the only verification method and the only authority, so a
 //! third party initializer gains no control.
 //!
 //! The subject must be a key. An address off the Ed25519 curve can never
 //! sign, so the document it would name could not be edited or even
-//! deactivated and its rent would be locked for good; it is also how an
-//! owned subject could be squatted ahead of its owner. Such subjects only
+//! deactivated, and its rent would be locked for good. An owned subject
+//! could also be squatted that way ahead of its owner. Such subjects only
 //! enter through `initialize_owned`.
 
 use pinocchio::{
@@ -34,10 +34,10 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     materialize(payer, did_account, system_program, subject, subject)
 }
 
-/// Creates the account for `subject` holding the initial document: version
-/// 1, no controllers, no services, and one protected `#default` Ed25519
-/// verification method with `default_key`. `initialize` passes the subject
-/// key itself; `initialize_owned` passes the signing authority's key.
+/// Creates the account for `subject` holding the initial document. It has
+/// version 1, no controllers, no services and one protected `#default` Ed25519
+/// verification method with `default_key`. `initialize` passes the subject key
+/// itself, and `initialize_owned` passes the signing authority's key.
 pub fn materialize(
     payer: &AccountView,
     did_account: &mut AccountView,
@@ -55,9 +55,9 @@ pub fn materialize(
     if did_account.address() != &pda {
         return Err(ProgramError::InvalidSeeds);
     }
-    // `initialize` targets an untouched system account; anything else is
-    // already initialized (or a deactivated tombstone, which must never
-    // resurrect).
+    // `initialize` targets an untouched system account. Anything else is
+    // already initialized, or is a deactivated tombstone, which must never
+    // resurrect.
     if !did_account.owned_by(&pinocchio_system::ID) || did_account.data_len() != 0 {
         return Err(ProgramError::AccountAlreadyInitialized);
     }
@@ -80,8 +80,8 @@ pub fn materialize(
         }
         .invoke_signed(&[Signer::from(&seeds)])?;
     } else {
-        // The address was pre-funded: top up to the rent minimum, then
-        // allocate + assign under the PDA signature.
+        // The address was pre-funded. Top up to the rent minimum, then
+        // allocate and assign under the PDA signature.
         let deficit = rent_min.saturating_sub(did_account.lamports());
         if deficit > 0 {
             Transfer {
