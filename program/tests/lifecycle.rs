@@ -604,6 +604,80 @@ fn test_account_length_must_match_the_layout() {
 }
 
 #[test]
+fn test_creation_at_pre_funded_addresses() {
+    // Anyone can send lamports to an address before the program creates an
+    // account there. Creation then tops up to the rent minimum, allocates
+    // and assigns under the PDA signature instead of creating the account.
+    let mut svm = setup();
+    let floor = svm.minimum_balance_for_rent_exemption(0);
+    let subject = Keypair::new();
+    svm.airdrop(&subject.pubkey(), AIRDROP).unwrap();
+    let s = subject.pubkey();
+    let pda = did_pda(&s);
+    svm.airdrop(&pda, floor).unwrap();
+    send(&mut svm, initialize_ix(&s, &s), &subject, &[]).unwrap();
+    let account = svm.get_account(&pda).unwrap();
+    assert_eq!(account.owner, program_id());
+    assert_eq!(account.data.len(), INITIAL_SPACE);
+    assert_eq!(
+        account.lamports,
+        svm.minimum_balance_for_rent_exemption(INITIAL_SPACE)
+    );
+    assert_eq!(decode(&svm, &pda).version, 1);
+
+    // An owned DID's address, funded beyond its rent. The surplus stays
+    // until the next resize settles the balance and refunds it to the payer.
+    let wallet = Keypair::new();
+    svm.airdrop(&wallet.pubkey(), AIRDROP).unwrap();
+    let w = wallet.pubkey();
+    let owned = did_pda(&owned_subject(&w, 3));
+    svm.airdrop(&owned, 50_000_000).unwrap();
+    send(&mut svm, initialize_owned_ix(&w, &w, 3), &wallet, &[]).unwrap();
+    assert_eq!(svm.get_account(&owned).unwrap().lamports, 50_000_000);
+    let before = svm.get_balance(&w).unwrap();
+    send(
+        &mut svm,
+        add_service_ix(&w, &w, &owned_subject(&w, 3), "m", "T", "x"),
+        &wallet,
+        &[],
+    )
+    .unwrap();
+    let account = svm.get_account(&owned).unwrap();
+    assert_eq!(
+        account.lamports,
+        svm.minimum_balance_for_rent_exemption(account.data.len())
+    );
+    assert!(svm.get_balance(&w).unwrap() > before + 40_000_000);
+
+    // A key buffer address funded ahead of its upload.
+    let kb = key_buffer_pda(&s, &s);
+    svm.airdrop(&kb, floor).unwrap();
+    send(
+        &mut svm,
+        create_key_buffer_ix(
+            &s,
+            &s,
+            &s,
+            "pq",
+            VM_TYPE_DILITHIUM5,
+            VM_FLAG_ASSERTION,
+            2592,
+        ),
+        &subject,
+        &[],
+    )
+    .unwrap();
+    let account = svm.get_account(&kb).unwrap();
+    assert_eq!(account.owner, program_id());
+    assert_eq!(account.data.len(), KEY_BUFFER_HEADER + 2592);
+    assert_eq!(
+        account.lamports,
+        svm.minimum_balance_for_rent_exemption(KEY_BUFFER_HEADER + 2592)
+    );
+    assert_eq!(decode_key_buffer(&svm, &kb).written, 0);
+}
+
+#[test]
 fn test_sponsored_initialize_grants_no_control_to_payer() {
     let mut svm = setup();
     let sponsor = Keypair::new();
