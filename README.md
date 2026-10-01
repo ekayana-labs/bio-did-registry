@@ -33,13 +33,16 @@ unlocks the features below.
 - Post quantum keys are ML-DSA-87 (FIPS 204) verification methods for
   long-lived off-chain assertions, uploaded in chunks through a key buffer.
 - Services anchor research metadata, such as `BioMetadata -> ipfs://<cid>`
-  or `DataverseRepository -> doi.org/...`.
-- Controllers link dataset DIDs to researcher and organization DIDs.
+  or `DataverseRepository -> doi.org/...`. `update_service` replaces a
+  service's type and endpoint in place, so a new CID is one instruction.
+- Controllers link dataset DIDs to researcher and organization DIDs. An
+  authority of a native controller may update the DIDs it controls.
 - Permanent deactivation leaves a rent-refunding tombstone, so a
   deactivated DID can never resurrect as its generative document.
 
 All mutations require an Ed25519 signature from a verification method
-carrying the `capabilityInvocation` relationship. `initialize` is
+carrying the `capabilityInvocation` relationship, on the DID itself or on
+one of its native controllers. `initialize` is
 permissionless, so a platform can sponsor account creation while the subject
 keeps sole control, because the created state is exactly the generative
 document. The subject has to be a key. An address off the Ed25519 curve is
@@ -54,8 +57,7 @@ owns, pays for and controls with one signature. See [Owned DIDs](#owned-dids).
 
 The program is built with [Pinocchio](https://github.com/anza-xyz/pinocchio).
 It is `no_std` and allocation-free (`no_allocator!`), and it edits account
-data in place, so a document holding sixteen 2.5 KB post-quantum keys costs
-the same few thousand compute units per edit as a minimal one. Accounts are
+data in place without ever deserializing the document. Accounts are
 exact-size at all times. Every instruction reallocates to the minimal
 serialized layout and settles the balance to exactly the rent-exempt
 minimum. The payer funds growth and receives the refund when an account
@@ -124,6 +126,26 @@ Because the authority must sign, nobody can register an owned DID in
 another wallet's name, and the same nonce under two authorities yields two
 unrelated DIDs.
 
+## Controllers and program authorities
+
+A DID's native controllers are other `did:bio` subjects. When the signer
+is not one of the DID's own authorities, the program reads the account
+after the instruction's own accounts as the registry account of a
+controller. If that controller is listed, is not deactivated and holds the
+signer as an authority, the update goes through. Only the controller's own
+methods count, so control reaches one level. A protected method still
+answers only to its own key, and the DID always keeps one authority of its
+own. A lab DID can then manage the dataset DIDs it controls, and a rotation
+in the lab reaches all of them at once.
+
+A program can hold authority as well. Its program address has no private
+key, so it signs through a CPI, the way a multisig or a DAO vault does. Such
+an address is off the Ed25519 curve, and the program accepts an off-curve
+key only when that key signs the transaction itself. A program therefore
+creates its own owned DID with `initialize_owned` and acts on it, or on the
+DIDs that DID controls, through CPI. The tests drive both through the
+`cpi-caller` fixture.
+
 ## Using the crate
 
 The program is published to [crates.io](https://crates.io/crates/bio-did-registry)
@@ -139,14 +161,18 @@ the crate links into an ordinary binary or another program. It exports the
 items below.
 
 - `ID` is the program address.
-- `ix` holds the thirteen instruction discriminators.
+- `ix` holds the fourteen instruction discriminators.
 - `state` holds the account discriminators, PDA seeds, size limits,
-  verification method type and flag constants, the `Sections` parser for
-  the account layout, the `KeyBufferRef` header parser, and `owned_subject`
-  for the subject an `initialize_owned` creates.
+  verification method type and flag constants, the header structs the
+  offsets come from, `DidView` with its entry iterators for reading a
+  `DidAccount`, the `KeyBufferRef` header parser, and `owned_subject` for
+  the subject an `initialize_owned` creates.
+- `reader` holds the bounds-checked cursor the layout code reads with.
 - `events` holds the three event discriminators.
 - `error::DidError` holds the domain errors behind custom codes
-  `6000..=6018`.
+  `6000..=6018`, with `from_code` and `message` to decode them.
+- `client`, off chain only, builds every instruction with its accounts in
+  order, and `upload_key` returns the whole key buffer sequence.
 
 The crate is `no_std` on the Solana target and a normal library elsewhere.
 
@@ -157,10 +183,16 @@ This program has not yet received an external audit. See
 
 The program enforces these core invariants on-chain.
 
-- Only `capabilityInvocation` Ed25519 keys may mutate a document.
+- Only `capabilityInvocation` Ed25519 keys may mutate a document, its own
+  or those of a native controller one level up.
 - The last update authority can never be removed or de-flagged.
 - `PROTECTED` verification methods only change under their own key, so
-  only Ed25519 methods, the kind that can sign a transaction, carry it.
+  only Ed25519 methods, the kind that can sign a transaction, carry it. A
+  protected method keeps `capabilityInvocation`, so its key can always
+  change or remove it, and a controller cannot.
+- An Ed25519 key is a curve point, unless it is a program address signing
+  the transaction itself. A secp256k1 key is a compressed point. An
+  ML-DSA-87 key never claims key agreement.
 - `#default` names the founding key and nothing else. No instruction can
   add a method or service under that fragment, even after the founding
   method was rotated out.
@@ -203,27 +235,43 @@ cargo test --test compute_units -- --nocapture
 ## Compute Units
 
 Measured by the `compute_units` test with fixed keys, so the figures are
-reproducible. An instruction that derives a PDA on chain pays 1500 CU for
-every bump candidate the search rejects. The table says how many the test
-keys hit, so a search that succeeds at the first candidate costs the figure
-minus 1500 per rejection. The binary is ~95 KB and the per edit cost is
-independent of document size.
+reproducible. An instruction that derives a PDA on chain pays about 350 CU
+for every bump candidate the search rejects. The table says how many the
+test keys hit, so a search that succeeds at the first candidate costs the
+figure minus about 350 per rejection. The binary is ~92 KB.
 
 | Instruction | CU |
 | --- | --- |
-| `initialize` (1 rejected bump) | 5529 |
-| `initialize_owned` (two searches, 1 rejected bump) | 6910 |
-| `add_verification_method` (Ed25519) | 5175 |
-| `create_key_buffer` (ML-DSA-87, 2.5 KB, 2 rejected bumps) | 8892 |
-| `write_key_buffer` (900 B chunk) | 1840 |
-| `add_verification_method_from_buffer` (2.5 KB key) | 6847 |
-| `close_key_buffer` | 1808 |
-| `remove_verification_method` (2.5 KB key) | 3759 |
-| `set_verification_method_flags` | 3080 |
-| `add_service` | 6220 |
-| `remove_service` | 3701 |
-| `set_controllers` (2 native + 2 external) | 6129 |
-| `deactivate` | 3210 |
+| `initialize` (1 rejected bump) | 2918 |
+| `initialize_owned` (two searches, 1 rejected bump) | 3136 |
+| `add_verification_method` (Ed25519) | 3660 |
+| `create_key_buffer` (ML-DSA-87, 2.5 KB, 2 rejected bumps) | 3715 |
+| `write_key_buffer` (900 B chunk) | 497 |
+| `add_verification_method_from_buffer` (2.5 KB key) | 3750 |
+| `close_key_buffer` | 463 |
+| `remove_verification_method` (2.5 KB key) | 1852 |
+| `set_verification_method_flags` | 1493 |
+| `add_service` | 4417 |
+| `update_service` (new CID) | 2772 |
+| `remove_service` | 1880 |
+| `set_controllers` (2 native + 2 external) | 4383 |
+| `deactivate` | 1498 |
+
+An edit walks the entries before the one it touches and moves the bytes
+after it, so the cost grows with the document. The same test measures a
+document at every limit, 50,040 bytes with sixteen methods, sixteen of the
+longest services and eight controllers of each kind.
+
+| Instruction on a full document | CU |
+| --- | --- |
+| `set_verification_method_flags` (last method) | 2854 |
+| `update_service` (last service) | 8911 |
+| `remove_service` (first service) | 2709 |
+| `add_service` (sixteenth) | 10945 |
+| `remove_verification_method` (first ML-DSA-87) | 2865 |
+| `add_verification_method` (sixteenth, Ed25519) | 5453 |
+| `set_controllers` (8 + 8) | 17362 |
+| `deactivate` | 2388 |
 
 ## License
 

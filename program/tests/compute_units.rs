@@ -22,9 +22,9 @@ use solana_transaction::versioned::VersionedTransaction;
 
 const PROGRAM_ID: &str = "H1gnV4GjNT3UV7AgGNUCkSaciuVVtM7hKb8JhPV3Xxy6";
 
-/// Per-instruction ceiling. Measured costs sit at 2-9k CU, so a breach of
+/// Per-instruction ceiling. Measured costs sit under 5k CU, so a breach of
 /// this bound means something regressed badly.
-const CU_CEILING: u64 = 15_000;
+const CU_CEILING: u64 = 10_000;
 
 /// Deterministic keys for the subject that signs everything, the rotation
 /// key it adds and two controller addresses.
