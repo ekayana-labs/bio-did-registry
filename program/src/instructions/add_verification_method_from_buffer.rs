@@ -20,7 +20,7 @@ use crate::{
 };
 
 pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
-    let [payer, authority, did_account, key_buffer, system_program, ..] = accounts else {
+    let [payer, authority, did_account, key_buffer, system_program, rest @ ..] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
     Reader::<Args>::new(args).finish()?;
@@ -48,7 +48,8 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         };
         let data = did_account.try_borrow()?;
         let doc = DidView::parse(&data)?;
-        doc.check_new_method(signer_key, &method)?;
+        authorize(&doc, signer_key, rest.first())?;
+        doc.check_new_method(&method)?;
         check_new_key(&method, kb.key(&buf), signer_key)?;
         fragment_buf[..kb.fragment.len()].copy_from_slice(kb.fragment);
         (

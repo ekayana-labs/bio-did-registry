@@ -21,7 +21,7 @@ use crate::{
 };
 
 pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
-    let [payer, authority, did_account, key_buffer, system_program, ..] = accounts else {
+    let [payer, authority, did_account, key_buffer, system_program, rest @ ..] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
     check_payer(payer)?;
@@ -44,15 +44,17 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
 
     // Protection is Ed25519 only, so a protected upload is always 32 bytes.
     // Whether they are the signer's own is settled on finish.
-    DidView::parse(&did_account.try_borrow()?)?.check_new_method(
-        signer_key,
-        &NewMethod {
+    {
+        let data = did_account.try_borrow()?;
+        let doc = DidView::parse(&data)?;
+        authorize(&doc, signer_key, rest.first())?;
+        doc.check_new_method(&NewMethod {
             fragment,
             method_type,
             flags,
             key_len,
-        },
-    )?;
+        })?;
+    }
 
     let (pda, bump) = find_pda(&[
         KEY_BUFFER_SEED,

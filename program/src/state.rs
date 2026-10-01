@@ -491,6 +491,17 @@ impl<'a> DidView<'a> {
         None
     }
 
+    /// True when `key` is one of the DID's native controllers.
+    #[inline(always)]
+    pub fn is_native_controller(&self, key: &[u8; 32]) -> bool {
+        let s = &self.sections;
+        self.data[s.nc_items..s.nc_items + 32 * s.nc_count]
+            .as_chunks::<32>()
+            .0
+            .iter()
+            .any(|controller| controller == key)
+    }
+
     /// True when `signer` holds an Ed25519 method with capabilityInvocation.
     #[inline(always)]
     pub fn is_authority(&self, signer: &[u8; 32]) -> bool {
@@ -532,11 +543,11 @@ impl<'a> DidView<'a> {
     }
 
     /// The rules a new verification method must pass against the document
-    /// as it is now, in the order every path that adds one reports them.
-    /// The key bytes are checked by [`check_new_key`] once they are known.
+    /// as it is now, once the signer is authorized, in the order every path
+    /// that adds one reports them. The key bytes are checked by
+    /// [`check_new_key`] once they are known.
     #[inline(always)]
-    pub fn check_new_method(&self, signer: &[u8; 32], m: &NewMethod) -> Result<(), ProgramError> {
-        self.require_authority(signer)?;
+    pub fn check_new_method(&self, m: &NewMethod) -> Result<(), ProgramError> {
         require(
             self.sections.vm_count < MAX_VERIFICATION_METHODS,
             DidError::TooManyVerificationMethods,

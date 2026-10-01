@@ -19,6 +19,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         payer,
         authority,
         did_account,
+        controller,
         subject,
     } = Update::try_from(accounts)?;
 
@@ -42,7 +43,8 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let s = {
         let data = did_account.try_borrow()?;
         let doc = DidView::parse(&data)?;
-        doc.check_new_method(signer_key, &method)?;
+        authorize(&doc, signer_key, controller)?;
+        doc.check_new_method(&method)?;
         check_new_key(&method, key_data, signer_key)?;
         *doc.sections()
     };

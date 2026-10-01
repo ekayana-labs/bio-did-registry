@@ -19,6 +19,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         payer,
         authority,
         did_account,
+        controller,
         subject,
     } = Update::try_from(accounts)?;
 
@@ -30,7 +31,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let (span_start, span_end, old_len, svc_count_pos, svc_count) = {
         let data = did_account.try_borrow()?;
         let doc = DidView::parse(&data)?;
-        doc.require_authority(signer_key)?;
+        authorize(&doc, signer_key, controller)?;
         let svc = doc
             .find_service(fragment)
             .ok_or(DidError::ServiceNotFound)?;

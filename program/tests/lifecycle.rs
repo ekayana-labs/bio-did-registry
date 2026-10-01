@@ -1712,6 +1712,291 @@ fn test_events_wire_format() {
 }
 
 // ---------------------------------------------------------------------------
+// Controller authority, through the registry account of a native controller
+// ---------------------------------------------------------------------------
+
+/// The instruction with the registry account of `controller` appended, the
+/// account the program reads when the signer is not a direct authority.
+fn via(mut ix: Instruction, controller: &Pubkey) -> Instruction {
+    ix.accounts
+        .push(AccountMeta::new_readonly(did_pda(controller), false));
+    ix
+}
+
+/// A lab DID with its own key, and a dataset DID owned by a wallet that
+/// lists the lab as its native controller.
+struct Lab {
+    lab: Keypair,
+    wallet: Keypair,
+    dataset: Pubkey,
+}
+
+fn lab_and_dataset(svm: &mut LiteSVM) -> Lab {
+    let lab = Keypair::new();
+    let wallet = Keypair::new();
+    svm.airdrop(&lab.pubkey(), AIRDROP).unwrap();
+    svm.airdrop(&wallet.pubkey(), AIRDROP).unwrap();
+    let (l, w) = (lab.pubkey(), wallet.pubkey());
+    send(svm, initialize_ix(&l, &l), &lab, &[]).unwrap();
+    send(svm, initialize_owned_ix(&w, &w, 1), &wallet, &[]).unwrap();
+    let dataset = owned_subject(&w, 1);
+    send(
+        svm,
+        set_controllers_ix(&w, &w, &dataset, &[l], &[]),
+        &wallet,
+        &[],
+    )
+    .unwrap();
+    Lab {
+        lab,
+        wallet,
+        dataset,
+    }
+}
+
+#[test]
+fn test_native_controllers_update_the_dids_they_control() {
+    let mut svm = setup();
+    let Lab {
+        lab,
+        wallet,
+        dataset,
+    } = lab_and_dataset(&mut svm);
+    let (l, w) = (lab.pubkey(), wallet.pubkey());
+    let pda = did_pda(&dataset);
+
+    // The lab key holds no method on the dataset. Alone it is refused, and
+    // with the lab's registry account it acts as the controller.
+    let add = add_service_ix(&l, &l, &dataset, "metadata", "BioMetadata", "ipfs://x");
+    assert_custom_err(
+        send(&mut svm, add.clone(), &lab, &[]),
+        6000,
+        "Unauthorized (no controller account)",
+    );
+    send(&mut svm, via(add, &l), &lab, &[]).unwrap();
+    send(
+        &mut svm,
+        via(
+            update_service_ix(&l, &l, &dataset, "metadata", "BioMetadata", "ipfs://y"),
+            &l,
+        ),
+        &lab,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(decode(&svm, &pda).services[0].endpoint, "ipfs://y");
+
+    // Every update path takes the controller account after its own.
+    let key = Keypair::new().pubkey();
+    send(
+        &mut svm,
+        via(
+            add_vm_ix(
+                &l,
+                &l,
+                &dataset,
+                "lab-key",
+                VM_TYPE_ED25519,
+                VM_FLAG_AUTHENTICATION,
+                key.as_ref(),
+            ),
+            &l,
+        ),
+        &lab,
+        &[],
+    )
+    .unwrap();
+    send(
+        &mut svm,
+        via(set_flags_ix(&l, &dataset, "lab-key", VM_FLAG_ASSERTION), &l),
+        &lab,
+        &[],
+    )
+    .unwrap();
+    let kb = key_buffer_pda(&dataset, &l);
+    let create = create_key_buffer_ix(
+        &l,
+        &l,
+        &dataset,
+        "pq",
+        VM_TYPE_DILITHIUM5,
+        VM_FLAG_ASSERTION,
+        2592,
+    );
+    send(&mut svm, via(create, &l), &lab, &[]).unwrap();
+    upload(&mut svm, &lab, &kb, &[7u8; 2592]);
+    send(
+        &mut svm,
+        via(add_vm_from_buffer_ix(&l, &l, &pda, &kb), &l),
+        &lab,
+        &[],
+    )
+    .unwrap();
+    send(
+        &mut svm,
+        via(remove_vm_ix(&l, &l, &dataset, "lab-key"), &l),
+        &lab,
+        &[],
+    )
+    .unwrap();
+    let did = decode(&svm, &pda);
+    assert_eq!(
+        did.verification_methods
+            .iter()
+            .map(|vm| vm.fragment.as_str())
+            .collect::<Vec<_>>(),
+        ["default", "pq"]
+    );
+
+    // The wallet's protected key still answers only to itself.
+    assert_custom_err(
+        send(
+            &mut svm,
+            via(remove_vm_ix(&l, &l, &dataset, "default"), &l),
+            &lab,
+            &[],
+        ),
+        6011,
+        "ProtectedVerificationMethod",
+    );
+
+    // A rotation in the lab reaches every DID the lab controls.
+    let next = Keypair::new();
+    svm.airdrop(&next.pubkey(), AIRDROP).unwrap();
+    let n = next.pubkey();
+    send(
+        &mut svm,
+        add_vm_ix(
+            &l,
+            &l,
+            &l,
+            "next",
+            VM_TYPE_ED25519,
+            VM_FLAG_CAPABILITY_INVOCATION,
+            n.as_ref(),
+        ),
+        &lab,
+        &[],
+    )
+    .unwrap();
+    send(
+        &mut svm,
+        via(remove_service_ix(&n, &n, &dataset, "metadata"), &l),
+        &next,
+        &[],
+    )
+    .unwrap();
+
+    // A controller may deactivate the DID, which then refuses the wallet too.
+    send(
+        &mut svm,
+        via(deactivate_ix(&n, &n, &dataset), &l),
+        &next,
+        &[],
+    )
+    .unwrap();
+    assert!(decode(&svm, &pda).deactivated);
+    assert_custom_err(
+        send(&mut svm, deactivate_ix(&w, &w, &dataset), &wallet, &[]),
+        6001,
+        "DidDeactivated",
+    );
+}
+
+#[test]
+fn test_controller_authority_reaches_one_level_and_needs_a_live_controller() {
+    let mut svm = setup();
+    let Lab {
+        lab,
+        wallet,
+        dataset,
+    } = lab_and_dataset(&mut svm);
+    let (l, w) = (lab.pubkey(), wallet.pubkey());
+
+    // A registry account of a DID that is not a native controller is refused.
+    let stranger = Keypair::new();
+    svm.airdrop(&stranger.pubkey(), AIRDROP).unwrap();
+    let x = stranger.pubkey();
+    send(&mut svm, initialize_ix(&x, &x), &stranger, &[]).unwrap();
+    send(
+        &mut svm,
+        add_vm_ix(
+            &x,
+            &x,
+            &x,
+            "lab",
+            VM_TYPE_ED25519,
+            VM_FLAG_CAPABILITY_INVOCATION,
+            l.as_ref(),
+        ),
+        &stranger,
+        &[],
+    )
+    .unwrap();
+    assert_custom_err(
+        send(
+            &mut svm,
+            via(add_service_ix(&l, &l, &dataset, "m", "T", "x"), &x),
+            &lab,
+            &[],
+        ),
+        6000,
+        "Unauthorized (not a controller)",
+    );
+
+    // An account that is not a registry account is refused as such.
+    let mut junk = add_service_ix(&l, &l, &dataset, "m", "T", "x");
+    junk.accounts.push(AccountMeta::new_readonly(l, false));
+    assert!(send(&mut svm, junk, &lab, &[])
+        .unwrap_err()
+        .contains("InvalidAccountOwner"));
+
+    // A second dataset controlled by the first. The lab controls the first
+    // only, so it reaches no further.
+    send(&mut svm, initialize_owned_ix(&w, &w, 2), &wallet, &[]).unwrap();
+    let nested = owned_subject(&w, 2);
+    send(
+        &mut svm,
+        set_controllers_ix(&w, &w, &nested, &[dataset], &[]),
+        &wallet,
+        &[],
+    )
+    .unwrap();
+    assert_custom_err(
+        send(
+            &mut svm,
+            via(add_service_ix(&l, &l, &nested, "m", "T", "x"), &dataset),
+            &lab,
+            &[],
+        ),
+        6000,
+        "Unauthorized (two levels)",
+    );
+    // The wallet is an authority of the first dataset, so it acts on the
+    // second through it.
+    send(
+        &mut svm,
+        via(add_service_ix(&w, &w, &nested, "m", "T", "x"), &dataset),
+        &wallet,
+        &[],
+    )
+    .unwrap();
+
+    // A deactivated controller controls nothing.
+    send(&mut svm, deactivate_ix(&l, &l, &l), &lab, &[]).unwrap();
+    assert_custom_err(
+        send(
+            &mut svm,
+            via(add_service_ix(&l, &l, &dataset, "m", "T", "x"), &l),
+            &lab,
+            &[],
+        ),
+        6000,
+        "Unauthorized (deactivated controller)",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Key buffers, the chunked upload of keys larger than one transaction
 // ---------------------------------------------------------------------------
 

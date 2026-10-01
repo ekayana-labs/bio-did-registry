@@ -19,17 +19,19 @@ use pinocchio_system::instructions::Transfer;
 use crate::error::{require, DidError};
 use crate::reader::{Account, Args, Reader};
 use crate::state::{
-    KeyBufferRef, ACCOUNT_DISCRIMINATOR, BASE_SPACE, DID_SEED, KEY_BUFFER_DISCRIMINATOR,
+    DidView, KeyBufferRef, ACCOUNT_DISCRIMINATOR, BASE_SPACE, DID_SEED, KEY_BUFFER_DISCRIMINATOR,
     KEY_BUFFER_HEADER, KEY_BUFFER_SEED, OFF_BUMP,
 };
 
 /// The accounts of an update that may resize the DID document,
 /// `[payer, authority, did_account, system_program]`, after the checks every
-/// such update makes.
+/// such update makes. The account after them, if any, is the registry
+/// account of a native controller, see [`authorize`].
 pub struct Update<'a> {
     pub payer: &'a mut AccountView,
     pub authority: &'a AccountView,
     pub did_account: &'a mut AccountView,
+    pub controller: Option<&'a AccountView>,
     /// The DID's subject, which the events name.
     pub subject: [u8; 32],
 }
@@ -39,7 +41,7 @@ impl<'a> TryFrom<&'a mut [AccountView]> for Update<'a> {
 
     #[inline(always)]
     fn try_from(accounts: &'a mut [AccountView]) -> Result<Self, ProgramError> {
-        let [payer, authority, did_account, system_program, ..] = accounts else {
+        let [payer, authority, did_account, system_program, rest @ ..] = accounts else {
             return Err(ProgramError::NotEnoughAccountKeys);
         };
         check_payer(payer)?;
@@ -50,6 +52,7 @@ impl<'a> TryFrom<&'a mut [AccountView]> for Update<'a> {
             payer,
             authority,
             did_account,
+            controller: rest.first(),
             subject,
         })
     }
@@ -81,6 +84,30 @@ pub fn check_system_program(system_program: &AccountView) -> Result<(), ProgramE
         return Err(ProgramError::IncorrectProgramId);
     }
     Ok(())
+}
+
+/// Checks that `signer` may update the DID in `doc`. The DID must not be
+/// deactivated, and the signer must be one of its authorities, or an
+/// authority of a native controller whose registry account is `controller`.
+/// Only the controller's own methods count, so control reaches one level.
+pub fn authorize(
+    doc: &DidView,
+    signer: &[u8; 32],
+    controller: Option<&AccountView>,
+) -> Result<(), ProgramError> {
+    require(!doc.is_deactivated(), DidError::DidDeactivated)?;
+    if doc.is_authority(signer) {
+        return Ok(());
+    }
+    let controller = controller.ok_or(DidError::Unauthorized)?;
+    let subject = load_did_account(controller)?;
+    require(doc.is_native_controller(&subject), DidError::Unauthorized)?;
+    let data = controller.try_borrow()?;
+    let parent = DidView::parse(&data)?;
+    require(
+        !parent.is_deactivated() && parent.is_authority(signer),
+        DidError::Unauthorized,
+    )
 }
 
 /// The program address for `seeds` and its bump, as `find_program_address`

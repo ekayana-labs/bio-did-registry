@@ -16,7 +16,7 @@ use crate::{
 };
 
 pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
-    let [authority, did_account, ..] = accounts else {
+    let [authority, did_account, rest @ ..] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
     check_authority_signer(authority)?;
@@ -34,7 +34,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         let mut data = did_account.try_borrow_mut()?;
         let flags_pos = {
             let doc = DidView::parse(&data)?;
-            doc.require_authority(signer_key)?;
+            authorize(&doc, signer_key, rest.first())?;
             let vm = doc
                 .find_vm(fragment)
                 .ok_or(DidError::VerificationMethodNotFound)?;

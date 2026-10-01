@@ -19,6 +19,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         payer,
         authority,
         did_account,
+        controller,
         subject,
     } = Update::try_from(accounts)?;
 
@@ -34,7 +35,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let (old_len, svc_count_pos, svc_count) = {
         let data = did_account.try_borrow()?;
         let doc = DidView::parse(&data)?;
-        doc.require_authority(signer_key)?;
+        authorize(&doc, signer_key, controller)?;
         let s = doc.sections();
         require(s.svc_count < MAX_SERVICES, DidError::TooManyServices)?;
         require(valid_fragment(fragment), DidError::InvalidFragment)?;

@@ -20,6 +20,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         payer,
         authority,
         did_account,
+        controller,
         subject,
     } = Update::try_from(accounts)?;
     Reader::<Args>::new(args).finish()?;
@@ -27,7 +28,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
 
     {
         let data = did_account.try_borrow()?;
-        DidView::parse(&data)?.require_authority(signer_key)?;
+        authorize(&DidView::parse(&data)?, signer_key, controller)?;
     }
 
     let now = Clock::get()?.unix_timestamp;
