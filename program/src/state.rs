@@ -475,6 +475,70 @@ impl<'a> DidView<'a> {
         require(!taken, DidError::FragmentAlreadyInUse)?;
         require(fragment != DEFAULT_FRAGMENT, DidError::InvalidFragment)
     }
+
+    /// The rules a new verification method must pass against the document
+    /// as it is now, in the order every path that adds one reports them.
+    /// The key bytes are checked by [`check_new_key`] once they are known.
+    #[inline(always)]
+    pub fn check_new_method(&self, signer: &[u8; 32], m: &NewMethod) -> Result<(), ProgramError> {
+        self.require_authority(signer)?;
+        require(
+            self.sections.vm_count < MAX_VERIFICATION_METHODS,
+            DidError::TooManyVerificationMethods,
+        )?;
+        require(valid_fragment(m.fragment), DidError::InvalidFragment)?;
+        self.require_fragment_free(m.fragment)?;
+        require(
+            expected_key_len(m.method_type) == Some(m.key_len),
+            DidError::InvalidKeyLength,
+        )?;
+        validate_vm_flags(m.method_type, m.flags)
+    }
+}
+
+/// A verification method on its way into a document, described without its
+/// key bytes, which may still sit in a key buffer.
+#[derive(Clone, Copy, Debug)]
+pub struct NewMethod<'a> {
+    pub fragment: &'a [u8],
+    pub method_type: u8,
+    pub flags: u16,
+    pub key_len: usize,
+}
+
+/// The rules a new method's key bytes must pass. A method may only be born
+/// protected if it belongs to the signer, so no co-authority can plant an
+/// unremovable key.
+#[inline(always)]
+pub fn check_new_key(m: &NewMethod, key: &[u8], signer: &[u8; 32]) -> Result<(), ProgramError> {
+    if m.flags & VM_FLAG_PROTECTED != 0 {
+        require(key == signer, DidError::ProtectedVerificationMethod)?;
+    }
+    Ok(())
+}
+
+/// Appends a verification method entry to a document whose data has already
+/// grown by the entry's size. `s` is the layout from before the growth. The
+/// services move right to make room, and the method count goes up by one.
+#[inline(always)]
+pub fn insert_vm(data: &mut [u8], s: &Sections, m: &NewMethod, key: &[u8]) {
+    let at = s.svc_count_pos;
+    let entry_len = vm_space(m.fragment.len(), key.len());
+    data.copy_within(at..s.end, at + entry_len);
+    let mut w = at;
+    data[w..w + 4].copy_from_slice(&(m.fragment.len() as u32).to_le_bytes());
+    w += 4;
+    data[w..w + m.fragment.len()].copy_from_slice(m.fragment);
+    w += m.fragment.len();
+    data[w] = m.method_type;
+    w += 1;
+    data[w..w + 2].copy_from_slice(&m.flags.to_le_bytes());
+    w += 2;
+    data[w..w + 4].copy_from_slice(&(key.len() as u32).to_le_bytes());
+    w += 4;
+    data[w..w + key.len()].copy_from_slice(key);
+    data[s.vm_count_pos..s.vm_count_pos + 4]
+        .copy_from_slice(&((s.vm_count + 1) as u32).to_le_bytes());
 }
 
 /// A cursor over the entries of one section, which ends where the next

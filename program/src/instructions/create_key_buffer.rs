@@ -15,7 +15,6 @@ use pinocchio::{
 use pinocchio_system::instructions::{Allocate, Assign, CreateAccount, Transfer};
 
 use crate::{
-    error::*,
     instructions::shared::*,
     reader::{Args, Reader},
     state::*,
@@ -40,24 +39,20 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let flags = r.u16()?;
     let key_len = r.u32()? as usize;
     r.finish()?;
-    let expected_len = expected_key_len(method_type).ok_or(ProgramError::InvalidInstructionData)?;
+    expected_key_len(method_type).ok_or(ProgramError::InvalidInstructionData)?;
     let signer_key = authority.address().as_array();
 
-    {
-        let data = did_account.try_borrow()?;
-        let doc = DidView::parse(&data)?;
-        doc.require_authority(signer_key)?;
-        require(
-            doc.sections().vm_count < MAX_VERIFICATION_METHODS,
-            DidError::TooManyVerificationMethods,
-        )?;
-        require(valid_fragment(fragment), DidError::InvalidFragment)?;
-        doc.require_fragment_free(fragment)?;
-        require(key_len == expected_len, DidError::InvalidKeyLength)?;
-        // Protection is Ed25519 only, so a protected upload is always 32
-        // bytes. Whether they are the signer's own is settled on finish.
-        validate_vm_flags(method_type, flags)?;
-    }
+    // Protection is Ed25519 only, so a protected upload is always 32 bytes.
+    // Whether they are the signer's own is settled on finish.
+    DidView::parse(&did_account.try_borrow()?)?.check_new_method(
+        signer_key,
+        &NewMethod {
+            fragment,
+            method_type,
+            flags,
+            key_len,
+        },
+    )?;
 
     let (pda, bump) = Address::find_program_address(
         &[
