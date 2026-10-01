@@ -106,8 +106,10 @@ pub fn load_did_account(did_account: &AccountView) -> Result<[u8; 32], ProgramEr
     let mut r = Reader::<Account>::at(&data, OFF_BUMP)?;
     let bump = r.u8()?;
     let subject = *r.array::<32>()?;
-    let expected = Address::create_program_address(&[DID_SEED, &subject, &[bump]], &crate::ID)
-        .map_err(|_| ProgramError::InvalidSeeds)?;
+    // Only this program writes a `DidAccount`, and it created this one at
+    // the address `find_program_address` returned with the stored bump, so
+    // hashing the seeds again proves the address without the curve check.
+    let expected = Address::derive_address(&[DID_SEED, &subject], Some(bump), &crate::ID);
     if did_account.address() != &expected {
         return Err(ProgramError::InvalidSeeds);
     }
@@ -151,11 +153,12 @@ pub(crate) fn check_key_buffer(
     if let Some(did) = did_account {
         require(kb.did_account == did.as_ref(), DidError::InvalidKeyBuffer)?;
     }
-    let expected = Address::create_program_address(
-        &[KEY_BUFFER_SEED, kb.did_account, kb.authority, &[kb.bump]],
+    // As in `load_did_account`, the program created the buffer at this bump.
+    let expected = Address::derive_address(
+        &[KEY_BUFFER_SEED, kb.did_account, kb.authority],
+        Some(kb.bump),
         &crate::ID,
-    )
-    .map_err(|_| ProgramError::InvalidSeeds)?;
+    );
     if key_buffer.address() != &expected {
         return Err(ProgramError::InvalidSeeds);
     }
