@@ -31,37 +31,23 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
 
     let (span_start, span_end, old_len, vm_count_pos, vm_count) = {
         let data = did_account.try_borrow()?;
-        let s = Sections::parse(&data)?;
-        require_authority(&data, &s, signer_key)?;
-
-        let mut found: Option<(usize, usize, u16, bool, bool)> = None;
-        for_each_vm(&data, &s, |vm| {
-            if vm.fragment == fragment {
-                found = Some((
-                    vm.start,
-                    vm.end,
-                    vm.flags,
-                    vm.key == signer_key,
-                    vm.method_type == VM_TYPE_ED25519
-                        && vm.flags & VM_FLAG_CAPABILITY_INVOCATION != 0,
-                ));
-                return Ok(false);
-            }
-            Ok(true)
-        })?;
-        let (start, end, flags, is_own_key, removes_authority) =
-            found.ok_or(DidError::VerificationMethodNotFound)?;
+        let doc = DidView::parse(&data)?;
+        doc.require_authority(signer_key)?;
+        let vm = doc
+            .find_vm(fragment)
+            .ok_or(DidError::VerificationMethodNotFound)?;
 
         // Protected methods may only be removed by their own key.
-        if flags & VM_FLAG_PROTECTED != 0 {
-            require(is_own_key, DidError::ProtectedVerificationMethod)?;
+        if vm.flags & VM_FLAG_PROTECTED != 0 {
+            require(vm.key == signer_key, DidError::ProtectedVerificationMethod)?;
         }
         // Never orphan the DID. At least one capabilityInvocation Ed25519
         // key must survive the removal.
-        if removes_authority {
-            require(authority_count(&data, &s)? > 1, DidError::LastAuthority)?;
+        if vm.is_authority() {
+            require(doc.authority_count() > 1, DidError::LastAuthority)?;
         }
-        (start, end, s.end, s.vm_count_pos, s.vm_count)
+        let s = doc.sections();
+        (vm.start, vm.end, s.end, s.vm_count_pos, s.vm_count)
     };
 
     let entry_len = span_end - span_start;

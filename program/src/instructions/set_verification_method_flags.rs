@@ -32,34 +32,27 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let new_version;
     {
         let mut data = did_account.try_borrow_mut()?;
-        let s = Sections::parse(&data)?;
-        require_authority(&data, &s, signer_key)?;
+        let flags_pos = {
+            let doc = DidView::parse(&data)?;
+            doc.require_authority(signer_key)?;
+            let vm = doc
+                .find_vm(fragment)
+                .ok_or(DidError::VerificationMethodNotFound)?;
 
-        let mut found: Option<(usize, u16, u8, bool)> = None;
-        for_each_vm(&data, &s, |vm| {
-            if vm.fragment == fragment {
-                found = Some((vm.flags_pos, vm.flags, vm.method_type, vm.key == signer_key));
-                return Ok(false);
+            // Changing a protected method, or granting or revoking protection,
+            // requires the method's own key as authority.
+            if (vm.flags | new_flags) & VM_FLAG_PROTECTED != 0 {
+                require(vm.key == signer_key, DidError::ProtectedVerificationMethod)?;
             }
-            Ok(true)
-        })?;
-        let (flags_pos, old_flags, method_type, is_own_key) =
-            found.ok_or(DidError::VerificationMethodNotFound)?;
+            validate_vm_flags(vm.method_type, new_flags)?;
 
-        // Changing a protected method, or granting or revoking protection,
-        // requires the method's own key as authority.
-        if (old_flags | new_flags) & VM_FLAG_PROTECTED != 0 {
-            require(is_own_key, DidError::ProtectedVerificationMethod)?;
-        }
-        validate_vm_flags(method_type, new_flags)?;
-
-        // Never orphan the DID by stripping the last capabilityInvocation key.
-        let was_authority =
-            method_type == VM_TYPE_ED25519 && old_flags & VM_FLAG_CAPABILITY_INVOCATION != 0;
-        let stays_authority = new_flags & VM_FLAG_CAPABILITY_INVOCATION != 0;
-        if was_authority && !stays_authority {
-            require(authority_count(&data, &s)? > 1, DidError::LastAuthority)?;
-        }
+            // Never orphan the DID by stripping the last capabilityInvocation key.
+            let stays_authority = new_flags & VM_FLAG_CAPABILITY_INVOCATION != 0;
+            if vm.is_authority() && !stays_authority {
+                require(doc.authority_count() > 1, DidError::LastAuthority)?;
+            }
+            vm.flags_pos
+        };
 
         data[flags_pos..flags_pos + 2].copy_from_slice(&new_flags.to_le_bytes());
         touch(&mut data, now);

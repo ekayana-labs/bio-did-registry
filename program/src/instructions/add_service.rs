@@ -35,11 +35,12 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
 
     let (old_len, svc_count_pos, svc_count) = {
         let data = did_account.try_borrow()?;
-        let s = Sections::parse(&data)?;
-        require_authority(&data, &s, signer_key)?;
+        let doc = DidView::parse(&data)?;
+        doc.require_authority(signer_key)?;
+        let s = doc.sections();
         require(s.svc_count < MAX_SERVICES, DidError::TooManyServices)?;
         require(valid_fragment(fragment), DidError::InvalidFragment)?;
-        require_fragment_free(&data, &s, fragment)?;
+        doc.require_fragment_free(fragment)?;
         require(
             valid_uri_ascii(service_type, MAX_SERVICE_TYPE_LEN),
             DidError::InvalidServiceValue,

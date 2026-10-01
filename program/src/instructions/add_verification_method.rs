@@ -38,14 +38,15 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
 
     let (insert_at, old_len, vm_count_pos, vm_count) = {
         let data = did_account.try_borrow()?;
-        let s = Sections::parse(&data)?;
-        require_authority(&data, &s, signer_key)?;
+        let doc = DidView::parse(&data)?;
+        doc.require_authority(signer_key)?;
+        let s = doc.sections();
         require(
             s.vm_count < MAX_VERIFICATION_METHODS,
             DidError::TooManyVerificationMethods,
         )?;
         require(valid_fragment(fragment), DidError::InvalidFragment)?;
-        require_fragment_free(&data, &s, fragment)?;
+        doc.require_fragment_free(fragment)?;
         require(key_data.len() == expected_len, DidError::InvalidKeyLength)?;
         validate_vm_flags(method_type, flags)?;
         // A method may only be born protected if it belongs to the signer,

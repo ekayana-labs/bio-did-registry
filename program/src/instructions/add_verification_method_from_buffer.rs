@@ -43,14 +43,15 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
             expected_key_len(kb.method_type).ok_or(ProgramError::InvalidInstructionData)?;
         let key = kb.key(&buf);
         let data = did_account.try_borrow()?;
-        let s = Sections::parse(&data)?;
-        require_authority(&data, &s, signer_key)?;
+        let doc = DidView::parse(&data)?;
+        doc.require_authority(signer_key)?;
+        let s = doc.sections();
         require(
             s.vm_count < MAX_VERIFICATION_METHODS,
             DidError::TooManyVerificationMethods,
         )?;
         require(valid_fragment(kb.fragment), DidError::InvalidFragment)?;
-        require_fragment_free(&data, &s, kb.fragment)?;
+        doc.require_fragment_free(kb.fragment)?;
         require(kb.key_len == expected_len, DidError::InvalidKeyLength)?;
         validate_vm_flags(kb.method_type, kb.flags)?;
         if kb.flags & VM_FLAG_PROTECTED != 0 {

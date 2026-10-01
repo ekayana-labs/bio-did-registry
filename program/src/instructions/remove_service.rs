@@ -31,19 +31,13 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
 
     let (span_start, span_end, old_len, svc_count_pos, svc_count) = {
         let data = did_account.try_borrow()?;
-        let s = Sections::parse(&data)?;
-        require_authority(&data, &s, signer_key)?;
-
-        let mut found: Option<(usize, usize)> = None;
-        for_each_service(&data, &s, |svc| {
-            if svc.fragment == fragment {
-                found = Some((svc.start, svc.end));
-                return Ok(false);
-            }
-            Ok(true)
-        })?;
-        let (start, end) = found.ok_or(DidError::ServiceNotFound)?;
-        (start, end, s.end, s.svc_count_pos, s.svc_count)
+        let doc = DidView::parse(&data)?;
+        doc.require_authority(signer_key)?;
+        let svc = doc
+            .find_service(fragment)
+            .ok_or(DidError::ServiceNotFound)?;
+        let s = doc.sections();
+        (svc.start, svc.end, s.end, s.svc_count_pos, s.svc_count)
     };
 
     let entry_len = span_end - span_start;

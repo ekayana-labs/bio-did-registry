@@ -45,14 +45,14 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
 
     {
         let data = did_account.try_borrow()?;
-        let s = Sections::parse(&data)?;
-        require_authority(&data, &s, signer_key)?;
+        let doc = DidView::parse(&data)?;
+        doc.require_authority(signer_key)?;
         require(
-            s.vm_count < MAX_VERIFICATION_METHODS,
+            doc.sections().vm_count < MAX_VERIFICATION_METHODS,
             DidError::TooManyVerificationMethods,
         )?;
         require(valid_fragment(fragment), DidError::InvalidFragment)?;
-        require_fragment_free(&data, &s, fragment)?;
+        doc.require_fragment_free(fragment)?;
         require(key_len == expected_len, DidError::InvalidKeyLength)?;
         // Protection is Ed25519 only, so a protected upload is always 32
         // bytes. Whether they are the signer's own is settled on finish.

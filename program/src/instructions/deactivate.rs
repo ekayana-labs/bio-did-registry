@@ -29,8 +29,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
 
     {
         let data = did_account.try_borrow()?;
-        let s = Sections::parse(&data)?;
-        require_authority(&data, &s, signer_key)?;
+        DidView::parse(&data)?.require_authority(signer_key)?;
     }
 
     let now = Clock::get()?.unix_timestamp;

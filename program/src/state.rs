@@ -357,6 +357,197 @@ impl Sections {
     }
 }
 
+/// A `DidAccount` whose layout [`Sections::parse`] accepted, borrowed from
+/// the account data. The section offsets come from these exact bytes, so a
+/// view never pairs a layout with a different buffer.
+#[derive(Clone, Copy, Debug)]
+pub struct DidView<'a> {
+    data: &'a [u8],
+    sections: Sections,
+}
+
+// The lookups below loop by hand. `Iterator::find` and `any` go through
+// `try_fold`, which SBF builds do not inline, and that costs CU on every call.
+impl<'a> DidView<'a> {
+    /// Parse the whole account data, starting at the discriminator, which
+    /// the caller has checked.
+    #[inline(always)]
+    pub fn parse(data: &'a [u8]) -> Result<Self, ProgramError> {
+        Ok(Self {
+            data,
+            sections: Sections::parse(data)?,
+        })
+    }
+
+    #[inline(always)]
+    pub const fn data(&self) -> &'a [u8] {
+        self.data
+    }
+
+    #[inline(always)]
+    pub const fn sections(&self) -> &Sections {
+        &self.sections
+    }
+
+    #[inline(always)]
+    pub fn is_deactivated(&self) -> bool {
+        self.data[OFF_DEACTIVATED] != 0
+    }
+
+    /// The verification method entries in storage order.
+    #[inline(always)]
+    pub fn vms(&self) -> VmIter<'a> {
+        let s = &self.sections;
+        VmIter {
+            reader: section(self.data, s.vm_items, s.svc_count_pos),
+        }
+    }
+
+    /// The service entries in storage order.
+    #[inline(always)]
+    pub fn services(&self) -> SvcIter<'a> {
+        let s = &self.sections;
+        SvcIter {
+            reader: section(self.data, s.svc_items, s.end),
+        }
+    }
+
+    /// The verification method named `fragment`.
+    #[inline(always)]
+    #[allow(clippy::manual_find)]
+    pub fn find_vm(&self, fragment: &[u8]) -> Option<VmRef<'a>> {
+        for vm in self.vms() {
+            if vm.fragment == fragment {
+                return Some(vm);
+            }
+        }
+        None
+    }
+
+    /// The service named `fragment`.
+    #[inline(always)]
+    #[allow(clippy::manual_find)]
+    pub fn find_service(&self, fragment: &[u8]) -> Option<SvcRef<'a>> {
+        for svc in self.services() {
+            if svc.fragment == fragment {
+                return Some(svc);
+            }
+        }
+        None
+    }
+
+    /// True when `signer` holds an Ed25519 method with capabilityInvocation.
+    #[inline(always)]
+    pub fn is_authority(&self, signer: &[u8; 32]) -> bool {
+        for vm in self.vms() {
+            if vm.is_authority() && vm.key == signer {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Checks that `signer` may mutate this DID. It must not be deactivated,
+    /// and the signer must be one of its authorities.
+    #[inline(never)]
+    pub fn require_authority(&self, signer: &[u8; 32]) -> Result<(), ProgramError> {
+        require(!self.is_deactivated(), DidError::DidDeactivated)?;
+        require(self.is_authority(signer), DidError::Unauthorized)
+    }
+
+    /// Number of Ed25519 methods holding capabilityInvocation.
+    #[inline(never)]
+    pub fn authority_count(&self) -> usize {
+        let mut n = 0;
+        for vm in self.vms() {
+            if vm.is_authority() {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    /// Fragments are unique across verification methods and services
+    /// together, and `#default` belongs to the founding method alone.
+    #[inline(never)]
+    pub fn require_fragment_free(&self, fragment: &[u8]) -> Result<(), ProgramError> {
+        let taken = self.find_vm(fragment).is_some() || self.find_service(fragment).is_some();
+        require(!taken, DidError::FragmentAlreadyInUse)?;
+        require(fragment != DEFAULT_FRAGMENT, DidError::InvalidFragment)
+    }
+}
+
+/// A cursor over the entries of one section, which ends where the next
+/// section's count begins. Offsets stay relative to the account data.
+#[inline(always)]
+fn section(data: &[u8], items: usize, end: usize) -> Reader<'_, Account> {
+    match data.get(..end) {
+        Some(head) => Reader::at(head, items).unwrap_or(Reader::new(&[])),
+        None => Reader::new(&[]),
+    }
+}
+
+/// Walks verification method entries. Over a [`DidView`] every entry reads
+/// back, since [`Sections::parse`] walked the same bytes.
+#[derive(Clone, Copy, Debug)]
+pub struct VmIter<'a> {
+    reader: Reader<'a, Account>,
+}
+
+impl<'a> Iterator for VmIter<'a> {
+    type Item = VmRef<'a>;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<VmRef<'a>> {
+        let r = &mut self.reader;
+        if r.remaining().is_empty() {
+            return None;
+        }
+        let start = r.offset();
+        let fragment = r.len_prefixed().ok()?;
+        let method_type = r.u8().ok()?;
+        let flags_pos = r.offset();
+        let flags = r.u16().ok()?;
+        let key = r.len_prefixed().ok()?;
+        Some(VmRef {
+            fragment,
+            method_type,
+            flags,
+            key,
+            start,
+            end: r.offset(),
+            flags_pos,
+        })
+    }
+}
+
+/// Walks service entries, like [`VmIter`].
+#[derive(Clone, Copy, Debug)]
+pub struct SvcIter<'a> {
+    reader: Reader<'a, Account>,
+}
+
+impl<'a> Iterator for SvcIter<'a> {
+    type Item = SvcRef<'a>;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<SvcRef<'a>> {
+        let r = &mut self.reader;
+        if r.remaining().is_empty() {
+            return None;
+        }
+        let start = r.offset();
+        let fragment = r.len_prefixed().ok()?;
+        r.len_prefixed().ok()?; // service_type
+        r.len_prefixed().ok()?; // endpoint
+        Some(SvcRef {
+            fragment,
+            start,
+            end: r.offset(),
+        })
+    }
+}
+
 /// A parsed verification method entry, borrowed from the account buffer.
 #[derive(Clone, Copy, Debug)]
 pub struct VmRef<'a> {
@@ -371,8 +562,18 @@ pub struct VmRef<'a> {
     pub flags_pos: usize,
 }
 
+impl VmRef<'_> {
+    /// True for an Ed25519 method holding capabilityInvocation, the kind of
+    /// method that may sign updates.
+    #[inline(always)]
+    pub fn is_authority(&self) -> bool {
+        self.method_type == VM_TYPE_ED25519 && self.flags & VM_FLAG_CAPABILITY_INVOCATION != 0
+    }
+}
+
 /// Iterate verification method entries. The buffer was validated by
 /// [`Sections::parse`], but every read stays bounds-checked.
+#[deprecated(note = "use `DidView::vms`")]
 pub fn for_each_vm<'a>(
     data: &'a [u8],
     s: &Sections,
@@ -410,6 +611,8 @@ pub struct SvcRef<'a> {
     pub end: usize,
 }
 
+/// Iterate service entries, bounds-checked like [`for_each_vm`].
+#[deprecated(note = "use `DidView::services`")]
 pub fn for_each_service<'a>(
     data: &'a [u8],
     s: &Sections,
@@ -439,6 +642,8 @@ pub fn for_each_service<'a>(
 
 /// Checks that `signer` may mutate this DID. It must not be deactivated, and the
 /// signer must match an Ed25519 verification method carrying capabilityInvocation.
+#[deprecated(note = "use `DidView::require_authority`")]
+#[allow(deprecated)]
 pub fn require_authority(data: &[u8], s: &Sections, signer: &[u8; 32]) -> Result<(), ProgramError> {
     require(data[OFF_DEACTIVATED] == 0, DidError::DidDeactivated)?;
     let mut authorized = false;
@@ -456,6 +661,8 @@ pub fn require_authority(data: &[u8], s: &Sections, signer: &[u8; 32]) -> Result
 }
 
 /// Number of Ed25519 methods holding capabilityInvocation.
+#[deprecated(note = "use `DidView::authority_count`")]
+#[allow(deprecated)]
 pub fn authority_count(data: &[u8], s: &Sections) -> Result<usize, ProgramError> {
     let mut n = 0usize;
     for_each_vm(data, s, |vm| {
@@ -469,6 +676,8 @@ pub fn authority_count(data: &[u8], s: &Sections) -> Result<usize, ProgramError>
 
 /// Fragments are unique across verification methods and services together,
 /// and `#default` belongs to the founding method alone.
+#[deprecated(note = "use `DidView::require_fragment_free`")]
+#[allow(deprecated)]
 pub fn require_fragment_free(
     data: &[u8],
     s: &Sections,
