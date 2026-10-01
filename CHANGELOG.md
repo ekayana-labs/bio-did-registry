@@ -25,6 +25,7 @@ adheres to [Semantic Versioning](https://semver.org/).
 - An Ed25519 key must be a curve point unless it signs the transaction.
 - A secp256k1 key must be a compressed point.
 - An ML-DSA-87 method may not carry `keyAgreement`.
+- `DidError` is non-exhaustive, so later error codes are additive.
 - The lifecycle in the compute unit report costs 41,169 CU, down from
   75,712.
 

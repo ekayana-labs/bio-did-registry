@@ -6,6 +6,7 @@ use pinocchio::error::ProgramError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
+#[non_exhaustive]
 pub enum DidError {
     /// Signer is not an authority for this DID
     Unauthorized = 6000,
