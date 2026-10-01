@@ -29,6 +29,8 @@
 
 #![cfg_attr(target_os = "solana", no_std)]
 
+#[cfg(not(target_os = "solana"))]
+pub mod client;
 pub mod error;
 pub mod events;
 pub mod instructions;
