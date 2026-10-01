@@ -257,6 +257,19 @@ fn lifecycle_compute_unit_report() {
             }),
         ),
         (
+            "update_service (new CID)",
+            Box::new(|w: &mut World| {
+                let mut data = [46u8, 169, 26, 33, 191, 78, 40, 221].to_vec();
+                put_str(&mut data, "metadata");
+                put_str(&mut data, "BioMetadata");
+                put_str(
+                    &mut data,
+                    "ipfs://bafybeihkoviema7g3gxyt6la7vd5ho32ictqbilu3wnlo3rs7ewhnp7lly",
+                );
+                w.send(data, true)
+            }),
+        ),
+        (
             "set_controllers (2 native + 2 other)",
             Box::new(move |w: &mut World| {
                 let mut data = [65u8, 40, 24, 8, 30, 81, 20, 179].to_vec();

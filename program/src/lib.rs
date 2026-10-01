@@ -66,6 +66,8 @@ pub mod ix {
     pub const CLOSE_KEY_BUFFER: [u8; 8] = [6, 209, 103, 32, 78, 18, 70, 184];
     // A DID with a program-derived subject, controlled by its creator.
     pub const INITIALIZE_OWNED: [u8; 8] = [51, 133, 240, 229, 41, 137, 108, 91];
+    // A service's type and endpoint, replaced in place.
+    pub const UPDATE_SERVICE: [u8; 8] = [46, 169, 26, 33, 191, 78, 40, 221];
 }
 
 #[inline]
@@ -103,6 +105,7 @@ pub fn process_instruction(
         }
         ix::CLOSE_KEY_BUFFER => instructions::close_key_buffer::process(accounts, args),
         ix::INITIALIZE_OWNED => instructions::initialize_owned::process(accounts, args),
+        ix::UPDATE_SERVICE => instructions::update_service::process(accounts, args),
         _ => Err(ProgramError::InvalidInstructionData),
     }
 }

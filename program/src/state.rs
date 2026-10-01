@@ -588,6 +588,26 @@ pub fn check_new_key(m: &NewMethod, key: &[u8], signer: &[u8; 32]) -> Result<(),
     }
 }
 
+/// Writes a service entry at `at` and returns the offset after it. The
+/// caller has made room for exactly that many bytes.
+#[inline(always)]
+pub fn write_service(
+    data: &mut [u8],
+    at: usize,
+    fragment: &[u8],
+    service_type: &[u8],
+    endpoint: &[u8],
+) -> usize {
+    let mut w = at;
+    for part in [fragment, service_type, endpoint] {
+        data[w..w + 4].copy_from_slice(&(part.len() as u32).to_le_bytes());
+        w += 4;
+        data[w..w + part.len()].copy_from_slice(part);
+        w += part.len();
+    }
+    w
+}
+
 /// Appends a verification method entry to a document whose data has already
 /// grown by the entry's size. `s` is the layout from before the growth. The
 /// services move right to make room, and the method count goes up by one.

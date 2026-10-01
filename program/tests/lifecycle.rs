@@ -35,6 +35,7 @@ const IX_ADD_SERVICE: [u8; 8] = [133, 207, 106, 32, 91, 111, 153, 30];
 const IX_REMOVE_SERVICE: [u8; 8] = [19, 102, 8, 231, 40, 141, 9, 110];
 const IX_SET_CONTROLLERS: [u8; 8] = [65, 40, 24, 8, 30, 81, 20, 179];
 const IX_DEACTIVATE: [u8; 8] = [44, 112, 33, 172, 113, 28, 142, 13];
+const IX_UPDATE_SERVICE: [u8; 8] = [46, 169, 26, 33, 191, 78, 40, 221];
 
 const VM_FLAG_AUTHENTICATION: u16 = 1 << 0;
 const VM_FLAG_ASSERTION: u16 = 1 << 1;
@@ -293,6 +294,25 @@ fn add_service_ix(
     endpoint: &str,
 ) -> Instruction {
     let mut data = IX_ADD_SERVICE.to_vec();
+    put_str(&mut data, fragment);
+    put_str(&mut data, service_type);
+    put_str(&mut data, endpoint);
+    Instruction {
+        program_id: program_id(),
+        accounts: mutate_metas(payer, authority, subject),
+        data,
+    }
+}
+
+fn update_service_ix(
+    payer: &Pubkey,
+    authority: &Pubkey,
+    subject: &Pubkey,
+    fragment: &str,
+    service_type: &str,
+    endpoint: &str,
+) -> Instruction {
+    let mut data = IX_UPDATE_SERVICE.to_vec();
     put_str(&mut data, fragment);
     put_str(&mut data, service_type);
     put_str(&mut data, endpoint);
@@ -1306,6 +1326,159 @@ fn test_services_and_controllers() {
     );
     let did = decode(&svm, &pda);
     assert!(did.services.is_empty());
+}
+
+#[test]
+fn test_update_service_rewrites_one_entry_in_place() {
+    let mut svm = setup();
+    let subject = Keypair::new();
+    svm.airdrop(&subject.pubkey(), AIRDROP).unwrap();
+    let s = subject.pubkey();
+    let pda = did_pda(&s);
+    send(&mut svm, initialize_ix(&s, &s), &subject, &[]).unwrap();
+    for (fragment, service_type, endpoint) in [
+        ("a", "TypeA", "https://a.example/1"),
+        ("b", "TypeB", "ipfs://bbbb"),
+        ("c", "TypeC", "https://c.example/3"),
+    ] {
+        send(
+            &mut svm,
+            add_service_ix(&s, &s, &s, fragment, service_type, endpoint),
+            &subject,
+            &[],
+        )
+        .unwrap();
+    }
+    let services = |svm: &LiteSVM| -> Vec<(String, String, String)> {
+        decode(svm, &pda)
+            .services
+            .into_iter()
+            .map(|svc| (svc.fragment, svc.service_type, svc.endpoint))
+            .collect()
+    };
+    let exact = |svm: &LiteSVM| {
+        let account = svm.get_account(&pda).unwrap();
+        assert_eq!(
+            account.lamports,
+            svm.minimum_balance_for_rent_exemption(account.data.len())
+        );
+    };
+    let owned = |list: &[(&str, &str, &str)]| -> Vec<(String, String, String)> {
+        list.iter()
+            .map(|(f, t, e)| (f.to_string(), t.to_string(), e.to_string()))
+            .collect()
+    };
+
+    // A longer endpoint grows the account and moves only the entries after it.
+    let long = format!("ipfs://{}", "b".repeat(100));
+    let before = account_len(&svm, &pda);
+    let version = decode(&svm, &pda).version;
+    let meta = send_meta(
+        &mut svm,
+        update_service_ix(&s, &s, &s, "b", "BioMetadata", &long),
+        &subject,
+        &[],
+    )
+    .unwrap();
+    assert!(meta.logs.iter().any(|l| l.starts_with("Program data: ")));
+    assert_eq!(
+        services(&svm),
+        owned(&[
+            ("a", "TypeA", "https://a.example/1"),
+            ("b", "BioMetadata", &long),
+            ("c", "TypeC", "https://c.example/3"),
+        ])
+    );
+    assert_eq!(account_len(&svm, &pda), before + 6 + 100 - 4);
+    assert_eq!(decode(&svm, &pda).version, version + 1);
+    exact(&svm);
+
+    // A shorter one shrinks it and refunds the payer.
+    let balance = svm.get_balance(&s).unwrap();
+    send(
+        &mut svm,
+        update_service_ix(&s, &s, &s, "b", "T", "x"),
+        &subject,
+        &[],
+    )
+    .unwrap();
+    assert!(svm.get_balance(&s).unwrap() > balance);
+    assert_eq!(
+        services(&svm),
+        owned(&[
+            ("a", "TypeA", "https://a.example/1"),
+            ("b", "T", "x"),
+            ("c", "TypeC", "https://c.example/3"),
+        ])
+    );
+    exact(&svm);
+
+    // The last entry, at the same size.
+    let len = account_len(&svm, &pda);
+    send(
+        &mut svm,
+        update_service_ix(&s, &s, &s, "c", "TypeC", "https://c.example/4"),
+        &subject,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(account_len(&svm, &pda), len);
+    assert_eq!(services(&svm)[2].2, "https://c.example/4");
+    exact(&svm);
+
+    // Errors, in the order the program checks them.
+    let outsider = Keypair::new();
+    svm.airdrop(&outsider.pubkey(), AIRDROP).unwrap();
+    let o = outsider.pubkey();
+    assert_custom_err(
+        send(
+            &mut svm,
+            update_service_ix(&o, &o, &s, "a", "T", "x"),
+            &outsider,
+            &[],
+        ),
+        6000,
+        "Unauthorized",
+    );
+    assert_custom_err(
+        send(
+            &mut svm,
+            update_service_ix(&s, &s, &s, "default", "T", "x"),
+            &subject,
+            &[],
+        ),
+        6005,
+        "ServiceNotFound (a method's fragment)",
+    );
+    for (service_type, endpoint) in [("", "x"), ("T", ""), ("T", "has space")] {
+        assert_custom_err(
+            send(
+                &mut svm,
+                update_service_ix(&s, &s, &s, "a", service_type, endpoint),
+                &subject,
+                &[],
+            ),
+            6014,
+            "InvalidServiceValue",
+        );
+    }
+    let mut padded = update_service_ix(&s, &s, &s, "a", "T", "x");
+    padded.data.push(0);
+    assert!(send(&mut svm, padded, &subject, &[])
+        .unwrap_err()
+        .contains("InvalidInstructionData"));
+
+    send(&mut svm, deactivate_ix(&s, &s, &s), &subject, &[]).unwrap();
+    assert_custom_err(
+        send(
+            &mut svm,
+            update_service_ix(&s, &s, &s, "a", "T", "x"),
+            &subject,
+            &[],
+        ),
+        6001,
+        "DidDeactivated",
+    );
 }
 
 #[test]
