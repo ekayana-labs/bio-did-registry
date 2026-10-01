@@ -887,12 +887,7 @@ fn test_set_flags_rules() {
     // Stripping capabilityInvocation from the sole authority must fail.
     let res = send(
         &mut svm,
-        set_flags_ix(
-            &s,
-            &s,
-            "default",
-            VM_FLAG_AUTHENTICATION | VM_FLAG_PROTECTED,
-        ),
+        set_flags_ix(&s, &s, "default", VM_FLAG_AUTHENTICATION),
         &subject,
         &[],
     );
@@ -926,6 +921,86 @@ fn test_set_flags_rules() {
     let did = decode(&svm, &pda);
     assert_eq!(did.verification_methods[0].flags & VM_FLAG_KEY_AGREEMENT, 0);
     assert_eq!(did.version, 2);
+}
+
+#[test]
+fn test_protected_methods_keep_their_authority() {
+    let mut svm = setup();
+    let subject = Keypair::new();
+    let rotation = Keypair::new();
+    svm.airdrop(&subject.pubkey(), AIRDROP).unwrap();
+    svm.airdrop(&rotation.pubkey(), AIRDROP).unwrap();
+    let (s, r) = (subject.pubkey(), rotation.pubkey());
+    send(&mut svm, initialize_ix(&s, &s), &subject, &[]).unwrap();
+    send(
+        &mut svm,
+        add_vm_ix(
+            &s,
+            &s,
+            &s,
+            "rotation",
+            VM_TYPE_ED25519,
+            VM_FLAG_CAPABILITY_INVOCATION,
+            r.as_ref(),
+        ),
+        &subject,
+        &[],
+    )
+    .unwrap();
+
+    // A protected method without capabilityInvocation could never be
+    // touched again, by its own key or anyone else's, so no path makes one.
+    let frozen = VM_FLAG_AUTHENTICATION | VM_FLAG_PROTECTED;
+    assert_custom_err(
+        send(
+            &mut svm,
+            set_flags_ix(&s, &s, "default", frozen),
+            &subject,
+            &[],
+        ),
+        6010,
+        "InvalidFlags (set_flags)",
+    );
+    assert_custom_err(
+        send(
+            &mut svm,
+            add_vm_ix(&s, &s, &s, "self", VM_TYPE_ED25519, frozen, s.as_ref()),
+            &subject,
+            &[],
+        ),
+        6010,
+        "InvalidFlags (add)",
+    );
+    assert_custom_err(
+        send(
+            &mut svm,
+            create_key_buffer_ix(&s, &s, &s, "self", VM_TYPE_ED25519, frozen, 32),
+            &subject,
+            &[],
+        ),
+        6010,
+        "InvalidFlags (key buffer)",
+    );
+
+    // The own key gives up authority and protection together, and then
+    // another authority can revoke the method.
+    send(
+        &mut svm,
+        set_flags_ix(&s, &s, "default", VM_FLAG_AUTHENTICATION),
+        &subject,
+        &[],
+    )
+    .unwrap();
+    send(
+        &mut svm,
+        remove_vm_ix(&r, &r, &s, "default"),
+        &rotation,
+        &[],
+    )
+    .unwrap();
+    let did = decode(&svm, &did_pda(&s));
+    assert_eq!(did.verification_methods.len(), 1);
+    assert_eq!(did.verification_methods[0].fragment, "rotation");
 }
 
 #[test]

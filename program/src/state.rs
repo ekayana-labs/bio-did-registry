@@ -89,7 +89,8 @@ pub const VM_FLAG_KEY_AGREEMENT: u16 = 1 << 2;
 pub const VM_FLAG_CAPABILITY_INVOCATION: u16 = 1 << 3;
 pub const VM_FLAG_CAPABILITY_DELEGATION: u16 = 1 << 4;
 /// A protected method can only be removed, re-flagged, or newly added when
-/// its own key signs as the transaction authority.
+/// its own key signs as the transaction authority. It keeps
+/// capabilityInvocation, so that key can always act on it.
 pub const VM_FLAG_PROTECTED: u16 = 1 << 8;
 
 pub const VM_RELATIONSHIP_MASK: u16 = VM_FLAG_AUTHENTICATION
@@ -826,12 +827,19 @@ pub fn require_fragment_free(
 /// - Only known bits may be set.
 /// - capabilityInvocation implies on-chain signing, so it is Ed25519 only.
 /// - Protection is proven by the method's own key signing a transaction,
-///   so it is Ed25519 only as well.
+///   so it is Ed25519 only as well, and it needs capabilityInvocation. A
+///   protected method without it could never be changed or removed again.
 /// - X25519 is a key-agreement key and cannot sign anything.
 pub fn validate_vm_flags(method_type: u8, flags: u16) -> Result<(), ProgramError> {
     require(flags & !VM_VALID_MASK == 0, DidError::InvalidFlags)?;
     if flags & (VM_FLAG_CAPABILITY_INVOCATION | VM_FLAG_PROTECTED) != 0 {
         require(method_type == VM_TYPE_ED25519, DidError::InvalidFlags)?;
+    }
+    if flags & VM_FLAG_PROTECTED != 0 {
+        require(
+            flags & VM_FLAG_CAPABILITY_INVOCATION != 0,
+            DidError::InvalidFlags,
+        )?;
     }
     if method_type == VM_TYPE_X25519 {
         require(
