@@ -10,7 +10,7 @@
 use pinocchio::{
     cpi::{Seed, Signer},
     error::ProgramError,
-    AccountView, Address, ProgramResult,
+    AccountView, ProgramResult,
 };
 use pinocchio_system::instructions::{Allocate, Assign, CreateAccount, Transfer};
 
@@ -54,14 +54,11 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         },
     )?;
 
-    let (pda, bump) = Address::find_program_address(
-        &[
-            KEY_BUFFER_SEED,
-            did_account.address().as_ref(),
-            authority.address().as_ref(),
-        ],
-        &crate::ID,
-    );
+    let (pda, bump) = find_pda(&[
+        KEY_BUFFER_SEED,
+        did_account.address().as_ref(),
+        authority.address().as_ref(),
+    ])?;
     if key_buffer.address() != &pda {
         return Err(ProgramError::InvalidSeeds);
     }

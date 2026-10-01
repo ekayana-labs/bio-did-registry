@@ -51,7 +51,7 @@ pub fn materialize(
         return Err(ProgramError::Immutable);
     }
 
-    let (pda, bump) = Address::find_program_address(&[DID_SEED, subject], &crate::ID);
+    let (pda, bump) = find_pda(&[DID_SEED, subject])?;
     if did_account.address() != &pda {
         return Err(ProgramError::InvalidSeeds);
     }

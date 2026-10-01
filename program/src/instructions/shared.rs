@@ -83,6 +83,14 @@ pub fn check_system_program(system_program: &AccountView) -> Result<(), ProgramE
     Ok(())
 }
 
+/// The program address for `seeds` and its bump, as `find_program_address`
+/// returns them. Each candidate costs a SHA-256 and a curve check through
+/// their syscalls rather than the 1500 CU of the PDA syscall.
+#[inline(always)]
+pub fn find_pda<const N: usize>(seeds: &[&[u8]; N]) -> Result<(Address, u8), ProgramError> {
+    Address::derive_program_address(seeds, &crate::ID).ok_or(ProgramError::InvalidSeeds)
+}
+
 /// Loads an existing `DidAccount` for mutation. It checks everything
 /// [`load_did_account`] checks, and that the account is writable.
 pub fn verify_did_account(did_account: &AccountView) -> Result<[u8; 32], ProgramError> {

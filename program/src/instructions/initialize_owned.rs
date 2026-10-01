@@ -10,7 +10,7 @@
 //! name, and distinct authorities can never collide on a nonce.
 //!
 //! It takes `[payer, authority, did_account, system_program]` and the nonce as a u64 LE.
-use pinocchio::{error::ProgramError, AccountView, Address, ProgramResult};
+use pinocchio::{error::ProgramError, AccountView, ProgramResult};
 
 use crate::{
     instructions::{initialize, shared::*},
@@ -26,8 +26,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         .try_into()
         .map_err(|_| ProgramError::InvalidInstructionData)?;
     let authority_key: &[u8; 32] = authority.address().as_array();
-    let (subject, _) =
-        Address::find_program_address(&owned_subject_seeds(authority_key, &nonce), &crate::ID);
+    let (subject, _) = find_pda(&owned_subject_seeds(authority_key, &nonce))?;
     initialize::materialize(
         payer,
         did_account,

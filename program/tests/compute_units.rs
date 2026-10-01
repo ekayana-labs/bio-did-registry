@@ -3,7 +3,7 @@
 //! CI catches cost regressions.
 //!
 //! The keys are fixed so the numbers are reproducible. Every PDA search
-//! costs 1500 CU per rejected bump candidate, which would otherwise make
+//! costs about 350 CU per rejected bump candidate, which would otherwise make
 //! the report and the ceiling check vary from run to run. `initialize` and
 //! `create_key_buffer` search once and `initialize_owned` searches twice.
 //!
