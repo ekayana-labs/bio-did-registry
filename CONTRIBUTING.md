@@ -10,6 +10,7 @@ later, which provides `cargo build-sbf`.
 
 ```console
 cargo build-sbf --manifest-path program/Cargo.toml
+cargo build-sbf --manifest-path program/tests/fixtures/cpi-caller/Cargo.toml
 cargo test
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings

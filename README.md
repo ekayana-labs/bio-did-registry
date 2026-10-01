@@ -195,6 +195,7 @@ parser, so the tests pin the wire format itself.
 
 ```console
 cargo build-sbf --manifest-path program/Cargo.toml
+cargo build-sbf --manifest-path program/tests/fixtures/cpi-caller/Cargo.toml
 cargo test
 cargo test --test compute_units -- --nocapture
 ```
