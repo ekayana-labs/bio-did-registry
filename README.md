@@ -153,7 +153,7 @@ so clients and CPI callers share its constants instead of re-deriving them.
 
 ```toml
 [dependencies]
-bio-did-registry = { version = "0.1", features = ["no-entrypoint"] }
+bio-did-registry = { version = "0.2", features = ["no-entrypoint"] }
 ```
 
 `no-entrypoint` leaves out the entrypoint, allocator, and panic handler so

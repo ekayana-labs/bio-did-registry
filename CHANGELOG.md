@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-01
+
 ### Added
 
 - `update_service` replaces a service's type and endpoint in place.
@@ -61,7 +63,8 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 First release, the Pinocchio build of the registry.
 
-[Unreleased]: https://github.com/ekayana-labs/bio-did-registry/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/ekayana-labs/bio-did-registry/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ekayana-labs/bio-did-registry/releases/tag/v0.2.0
 [0.1.2]: https://github.com/ekayana-labs/bio-did-registry/releases/tag/v0.1.2
 [0.1.1]: https://github.com/ekayana-labs/bio-did-registry/releases/tag/v0.1.1
 [0.1.0]: https://github.com/ekayana-labs/bio-did-registry/releases/tag/v0.1.0
