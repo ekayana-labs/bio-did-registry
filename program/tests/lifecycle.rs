@@ -2194,6 +2194,18 @@ fn test_controller_authority_reaches_one_level_and_needs_a_live_controller() {
         "Unauthorized (not a controller)",
     );
 
+    // A DID named as its own controller grants nothing, on every path.
+    for ix in [
+        add_service_ix(&l, &l, &dataset, "m", "T", "x"),
+        set_flags_ix(&l, &dataset, "default", VM_FLAG_AUTHENTICATION),
+    ] {
+        assert_custom_err(
+            send(&mut svm, via(ix, &dataset), &lab, &[]),
+            6000,
+            "Unauthorized (itself as controller)",
+        );
+    }
+
     // An account that is not a registry account is refused as such.
     let mut junk = add_service_ix(&l, &l, &dataset, "m", "T", "x");
     junk.accounts.push(AccountMeta::new_readonly(l, false));
