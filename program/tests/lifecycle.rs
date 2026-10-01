@@ -1004,6 +1004,70 @@ fn test_protected_methods_keep_their_authority() {
 }
 
 #[test]
+fn test_ed25519_keys_must_be_curve_points() {
+    let mut svm = setup();
+    let subject = Keypair::new();
+    svm.airdrop(&subject.pubkey(), AIRDROP).unwrap();
+    let s = subject.pubkey();
+    send(&mut svm, initialize_ix(&s, &s), &subject, &[]).unwrap();
+    let pda = did_pda(&s);
+
+    // A program address has no private key. As an authority it could stand
+    // in for the last key that signs, and as an authentication key nothing
+    // could ever verify it, so neither path accepts one.
+    let ghost = owned_subject(&s, 99);
+    assert!(!ghost.is_on_curve());
+    for flags in [VM_FLAG_CAPABILITY_INVOCATION, VM_FLAG_AUTHENTICATION] {
+        assert_custom_err(
+            send(
+                &mut svm,
+                add_vm_ix(&s, &s, &s, "ghost", VM_TYPE_ED25519, flags, ghost.as_ref()),
+                &subject,
+                &[],
+            ),
+            6018,
+            "InvalidKey",
+        );
+    }
+
+    // The same key through a key buffer fails when the buffer is finished.
+    let kb = key_buffer_pda(&s, &s);
+    send(
+        &mut svm,
+        create_key_buffer_ix(
+            &s,
+            &s,
+            &s,
+            "ghost",
+            VM_TYPE_ED25519,
+            VM_FLAG_AUTHENTICATION,
+            32,
+        ),
+        &subject,
+        &[],
+    )
+    .unwrap();
+    upload(&mut svm, &subject, &kb, ghost.as_ref());
+    assert_custom_err(
+        send(
+            &mut svm,
+            add_vm_from_buffer_ix(&s, &s, &pda, &kb),
+            &subject,
+            &[],
+        ),
+        6018,
+        "InvalidKey (key buffer)",
+    );
+    send(&mut svm, close_key_buffer_ix(&s, &s, &kb), &subject, &[]).unwrap();
+
+    // The probe that found this removed the founding key next and left the
+    // DID with nothing that can sign. It now keeps its only real authority.
+    let res = send(&mut svm, remove_vm_ix(&s, &s, &s, "default"), &subject, &[]);
+    assert_custom_err(res, 6012, "LastAuthority");
+    assert_eq!(decode(&svm, &pda).verification_methods.len(), 1);
+}
+
+#[test]
 fn test_services_and_controllers() {
     let mut svm = setup();
     let subject = Keypair::new();

@@ -43,6 +43,8 @@ pub enum DidError {
     InvalidKeyChunk = 6016,
     /// Key buffer has not received every byte of the key yet
     KeyBufferIncomplete = 6017,
+    /// Key material is not a valid public key for the verification method type
+    InvalidKey = 6018,
 }
 
 impl From<DidError> for ProgramError {

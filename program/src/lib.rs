@@ -23,7 +23,7 @@
 //! names an asset its owner pays for. Such a DID has no generative document.
 //!
 //! The wire format is frozen. It covers the instruction, account and event
-//! discriminators, the borsh account layout and the error codes 6000..6017. The
+//! discriminators, the borsh account layout and the error codes 6000..6018. The
 //! golden vectors in this repository's test suite pin it, and deployed resolvers
 //! and clients depend on every byte of it. Additions only ever append.
 

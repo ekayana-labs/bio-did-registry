@@ -561,13 +561,23 @@ pub struct NewMethod<'a> {
     pub key_len: usize,
 }
 
-/// The rules a new method's key bytes must pass. A method may only be born
-/// protected if it belongs to the signer, so no co-authority can plant an
-/// unremovable key.
+/// The rules a new method's key bytes must pass.
+///
+/// - A method may only be born protected if it belongs to the signer, so no
+///   co-authority can plant an unremovable key.
+/// - An Ed25519 key must be a curve point. An address off the curve has no
+///   private key, and only a program can sign for it, through a CPI, so it
+///   enters only as the signer itself.
 #[inline(always)]
 pub fn check_new_key(m: &NewMethod, key: &[u8], signer: &[u8; 32]) -> Result<(), ProgramError> {
     if m.flags & VM_FLAG_PROTECTED != 0 {
         require(key == signer, DidError::ProtectedVerificationMethod)?;
+    }
+    if m.method_type == VM_TYPE_ED25519 {
+        require(
+            key == signer || pinocchio::address::bytes_are_curve_point(key),
+            DidError::InvalidKey,
+        )?;
     }
     Ok(())
 }

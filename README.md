@@ -72,7 +72,7 @@ crate pin it.
   `sha256("account:KeyBuffer")[..8]`.
 - Events are `sha256("event:<Name>")[..8]` followed by the borsh fields,
   emitted through `sol_log_data`.
-- Domain errors are custom program error codes `6000..=6017`.
+- Domain errors are custom program error codes `6000..=6018`.
 - Instruction arguments are exact. Bytes past the last field are rejected
   as `InvalidInstructionData`, the way borsh's `try_from_slice` rejects them.
 
@@ -146,7 +146,7 @@ items below.
   for the subject an `initialize_owned` creates.
 - `events` holds the three event discriminators.
 - `error::DidError` holds the domain errors behind custom codes
-  `6000..=6017`.
+  `6000..=6018`.
 
 The crate is `no_std` on the Solana target and a normal library elsewhere.
 

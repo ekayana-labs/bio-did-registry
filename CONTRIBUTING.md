@@ -24,7 +24,7 @@ prints the per-instruction compute-unit report.
 - The wire format is frozen. Deployed clients and the
   [`did-bio-core`](https://github.com/ekayana-labs/did-bio-core) resolver
   consume the instruction, account and event discriminators, the borsh
-  account layout, the PDA seeds and the domain error codes `6000..=6017`. A
+  account layout, the PDA seeds and the domain error codes `6000..=6018`. A
   change to any of them is a breaking protocol change and needs an issue
   and a migration plan first.
 - The program never allocates. It is `no_std` with `no_allocator!`, and
