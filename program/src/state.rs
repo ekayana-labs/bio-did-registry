@@ -25,6 +25,8 @@
 //! compute spans with [`Sections::parse`], then move and patch the bytes in
 //! place.
 
+use core::mem::{offset_of, size_of};
+
 use pinocchio::error::ProgramError;
 
 use crate::error::{require, DidError};
@@ -120,21 +122,34 @@ pub fn expected_key_len(method_type: u8) -> Option<usize> {
     }
 }
 
+/// The fixed head of a `DidAccount`, before the vector sections. Every
+/// field is a byte array, so the struct has no padding and its field
+/// offsets are the account layout's.
+#[repr(C)]
+pub struct DidAccountHeader {
+    pub discriminator: [u8; 8],
+    pub version: [u8; 8],
+    pub bump: u8,
+    pub subject: [u8; 32],
+    pub deactivated: u8,
+    pub updated_at: [u8; 8],
+}
+
 // Fixed field offsets.
-pub const OFF_VERSION: usize = 8;
-pub const OFF_BUMP: usize = 16;
-pub const OFF_SUBJECT: usize = 17;
-pub const OFF_DEACTIVATED: usize = 49;
-pub const OFF_UPDATED_AT: usize = 50;
+pub const OFF_VERSION: usize = offset_of!(DidAccountHeader, version);
+pub const OFF_BUMP: usize = offset_of!(DidAccountHeader, bump);
+pub const OFF_SUBJECT: usize = offset_of!(DidAccountHeader, subject);
+pub const OFF_DEACTIVATED: usize = offset_of!(DidAccountHeader, deactivated);
+pub const OFF_UPDATED_AT: usize = offset_of!(DidAccountHeader, updated_at);
 /// Offset of the `native_controllers` count, the first vector section.
-pub const OFF_SECTIONS: usize = 58;
+pub const OFF_SECTIONS: usize = size_of::<DidAccountHeader>();
 
 /// The discriminator, the scalars and the four vector length prefixes.
-pub const BASE_SPACE: usize = 8 + 8 + 1 + 32 + 1 + 8 + 4 + 4 + 4 + 4;
+pub const BASE_SPACE: usize = OFF_SECTIONS + 4 * 4;
 /// The deactivated tombstone, with all vectors empty.
 pub const TOMBSTONE_SPACE: usize = BASE_SPACE;
 /// A fresh account holding only the subject's "default" method.
-pub const INITIAL_SPACE: usize = BASE_SPACE + 4 + DEFAULT_FRAGMENT.len() + 1 + 2 + 4 + 32;
+pub const INITIAL_SPACE: usize = BASE_SPACE + vm_space(DEFAULT_FRAGMENT.len(), 32);
 
 /// Serialized size of one verification method entry.
 #[inline(always)]
@@ -176,18 +191,57 @@ pub const KEY_BUFFER_DISCRIMINATOR: [u8; 8] = [150, 138, 44, 35, 255, 159, 45, 0
 /// PDA seed prefix. The seeds are ["bio-did-key", did_account, authority].
 pub const KEY_BUFFER_SEED: &[u8] = b"bio-did-key";
 
-pub const KB_OFF_DID_ACCOUNT: usize = 8;
-pub const KB_OFF_AUTHORITY: usize = 40;
-pub const KB_OFF_BUMP: usize = 72;
-pub const KB_OFF_METHOD_TYPE: usize = 73;
-pub const KB_OFF_FLAGS: usize = 74;
-pub const KB_OFF_KEY_LEN: usize = 76;
-pub const KB_OFF_WRITTEN: usize = 80;
-pub const KB_OFF_FRAGMENT_LEN: usize = 84;
-pub const KB_OFF_FRAGMENT: usize = 88;
+/// The fixed header of a `KeyBuffer`, which the key bytes follow. Like
+/// [`DidAccountHeader`] it is all byte arrays, so its offsets are the
+/// account layout's.
+#[repr(C)]
+pub struct KeyBufferHeader {
+    pub discriminator: [u8; 8],
+    pub did_account: [u8; 32],
+    pub authority: [u8; 32],
+    pub bump: u8,
+    pub method_type: u8,
+    pub flags: [u8; 2],
+    pub key_len: [u8; 4],
+    pub written: [u8; 4],
+    pub fragment_len: [u8; 4],
+    pub fragment: [u8; MAX_FRAGMENT_LEN],
+}
+
+pub const KB_OFF_DID_ACCOUNT: usize = offset_of!(KeyBufferHeader, did_account);
+pub const KB_OFF_AUTHORITY: usize = offset_of!(KeyBufferHeader, authority);
+pub const KB_OFF_BUMP: usize = offset_of!(KeyBufferHeader, bump);
+pub const KB_OFF_METHOD_TYPE: usize = offset_of!(KeyBufferHeader, method_type);
+pub const KB_OFF_FLAGS: usize = offset_of!(KeyBufferHeader, flags);
+pub const KB_OFF_KEY_LEN: usize = offset_of!(KeyBufferHeader, key_len);
+pub const KB_OFF_WRITTEN: usize = offset_of!(KeyBufferHeader, written);
+pub const KB_OFF_FRAGMENT_LEN: usize = offset_of!(KeyBufferHeader, fragment_len);
+pub const KB_OFF_FRAGMENT: usize = offset_of!(KeyBufferHeader, fragment);
 /// Offset of the key bytes, which is also the fixed header size.
-pub const KB_OFF_KEY: usize = KB_OFF_FRAGMENT + MAX_FRAGMENT_LEN;
+pub const KB_OFF_KEY: usize = size_of::<KeyBufferHeader>();
 pub const KEY_BUFFER_HEADER: usize = KB_OFF_KEY;
+
+// The wire format is frozen, so a field that moves fails the build.
+const _: () = {
+    assert!(OFF_VERSION == 8);
+    assert!(OFF_BUMP == 16);
+    assert!(OFF_SUBJECT == 17);
+    assert!(OFF_DEACTIVATED == 49);
+    assert!(OFF_UPDATED_AT == 50);
+    assert!(OFF_SECTIONS == 58);
+    assert!(BASE_SPACE == 74);
+    assert!(INITIAL_SPACE == 124);
+    assert!(KB_OFF_DID_ACCOUNT == 8);
+    assert!(KB_OFF_AUTHORITY == 40);
+    assert!(KB_OFF_BUMP == 72);
+    assert!(KB_OFF_METHOD_TYPE == 73);
+    assert!(KB_OFF_FLAGS == 74);
+    assert!(KB_OFF_KEY_LEN == 76);
+    assert!(KB_OFF_WRITTEN == 80);
+    assert!(KB_OFF_FRAGMENT_LEN == 84);
+    assert!(KB_OFF_FRAGMENT == 88);
+    assert!(KEY_BUFFER_HEADER == 120);
+};
 
 /// A parsed key buffer header, borrowed from the account buffer.
 #[derive(Clone, Copy, Debug)]
