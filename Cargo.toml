@@ -1,5 +1,5 @@
 [workspace]
-members = ["program"]
+members = ["program", "program/tests/fixtures/cpi-caller"]
 resolver = "2"
 
 [workspace.metadata.cli]

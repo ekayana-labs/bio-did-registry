@@ -12,4 +12,5 @@ pub mod remove_service;
 pub mod remove_verification_method;
 pub mod set_controllers;
 pub mod set_verification_method_flags;
+pub mod update_service;
 pub mod write_key_buffer;

@@ -1,10 +1,5 @@
 name: audit
 
-# Weekly scan of the locked dependency tree against the RustSec advisory
-# database. New advisories against an already released tree do not arrive
-# through a push, so this runs on a schedule and opens an issue when one
-# lands.
-
 on:
   schedule:
     - cron: "17 6 * * 1"

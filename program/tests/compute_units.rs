@@ -1,13 +1,13 @@
-//! Compute unit report: replays one full DID lifecycle and prints the CU
+//! Compute unit report. It replays one full DID lifecycle and prints the CU
 //! consumed per instruction, asserting a generous ceiling per instruction so
 //! CI catches cost regressions.
 //!
-//! The keys are fixed so the numbers are reproducible: every PDA search
-//! (`initialize`, `initialize_owned` twice, `create_key_buffer`) costs
-//! 1500 CU per rejected bump candidate, which would otherwise make the
-//! report, and the ceiling check, vary from run to run.
+//! The keys are fixed so the numbers are reproducible. Every PDA search
+//! costs about 350 CU per rejected bump candidate, which would otherwise make
+//! the report and the ceiling check vary from run to run. `initialize` and
+//! `create_key_buffer` search once and `initialize_owned` searches twice.
 //!
-//! Run with output: `cargo test --test compute_units -- --nocapture`
+//! Run `cargo test --test compute_units -- --nocapture` to see the output.
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -22,12 +22,12 @@ use solana_transaction::versioned::VersionedTransaction;
 
 const PROGRAM_ID: &str = "H1gnV4GjNT3UV7AgGNUCkSaciuVVtM7hKb8JhPV3Xxy6";
 
-/// Per-instruction ceiling. Measured costs sit at 2-9k CU; a breach of this
-/// bound means something regressed badly.
-const CU_CEILING: u64 = 15_000;
+/// Per-instruction ceiling. Measured costs sit under 5k CU, so a breach of
+/// this bound means something regressed badly.
+const CU_CEILING: u64 = 10_000;
 
-/// Deterministic keys: the subject that signs everything, the rotation key
-/// it adds, and two controller addresses.
+/// Deterministic keys for the subject that signs everything, the rotation
+/// key it adds and two controller addresses.
 fn fixed_keypair(tag: u8) -> Keypair {
     Keypair::new_from_array([tag; 32])
 }
@@ -61,7 +61,7 @@ impl World {
         let so = std::fs::read(
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/deploy/bio_did_registry.so"),
         )
-        .expect("build first: cargo build-sbf --manifest-path program/Cargo.toml");
+        .expect("run cargo build-sbf --manifest-path program/Cargo.toml first");
         let mut svm = LiteSVM::new();
         svm.add_program(program_id(), &so).unwrap();
         let subject = fixed_keypair(1);
@@ -87,6 +87,8 @@ impl World {
             accounts,
             data,
         };
+        // A fresh blockhash, so a repeated instruction is a new transaction.
+        self.svm.expire_blockhash();
         let blockhash = self.svm.latest_blockhash();
         let msg = Message::new_with_blockhash(&[ix], Some(&self.subject.pubkey()), &blockhash);
         let tx =
@@ -257,6 +259,19 @@ fn lifecycle_compute_unit_report() {
             }),
         ),
         (
+            "update_service (new CID)",
+            Box::new(|w: &mut World| {
+                let mut data = [46u8, 169, 26, 33, 191, 78, 40, 221].to_vec();
+                put_str(&mut data, "metadata");
+                put_str(&mut data, "BioMetadata");
+                put_str(
+                    &mut data,
+                    "ipfs://bafybeihkoviema7g3gxyt6la7vd5ho32ictqbilu3wnlo3rs7ewhnp7lly",
+                );
+                w.send(data, true)
+            }),
+        ),
+        (
             "set_controllers (2 native + 2 other)",
             Box::new(move |w: &mut World| {
                 let mut data = [65u8, 40, 24, 8, 30, 81, 20, 179].to_vec();
@@ -330,3 +345,130 @@ fn lifecycle_compute_unit_report() {
         format!("TOTAL ({count} instructions)")
     );
 }
+
+/// The costs on a document at every limit at once: sixteen methods, fifteen
+/// of them ML-DSA-87, sixteen services of the longest type and endpoint, and
+/// eight native plus eight external controllers of the longest form. An
+/// edit walks the entries it passes, so these are the worst cases.
+#[test]
+fn full_document_compute_unit_report() {
+    let mut w = World::new();
+    w.send_initialize();
+    let ed25519 = |w: &mut World, fragment: &str, key: &[u8]| {
+        let mut data = [213u8, 200, 190, 61, 28, 104, 245, 25].to_vec();
+        put_str(&mut data, fragment);
+        data.push(0);
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&32u32.to_le_bytes());
+        data.extend_from_slice(key);
+        w.send(data, true)
+    };
+    let ml_dsa = |w: &mut World, fragment: &str| {
+        let mut data = [213u8, 200, 190, 61, 28, 104, 245, 25].to_vec();
+        put_str(&mut data, fragment);
+        data.push(3);
+        data.extend_from_slice(&(1u16 << 1).to_le_bytes());
+        data.extend_from_slice(&2592u32.to_le_bytes());
+        data.extend_from_slice(&[7u8; 2592]);
+        w.send(data, true)
+    };
+    let service_type = "T".repeat(64);
+    let endpoint = format!("https://{}", "e".repeat(504));
+    let service = |w: &mut World, disc: [u8; 8], fragment: &str| {
+        let mut data = disc.to_vec();
+        put_str(&mut data, fragment);
+        put_str(&mut data, &service_type);
+        put_str(&mut data, &endpoint);
+        w.send(data, true)
+    };
+    const ADD_SERVICE: [u8; 8] = [133, 207, 106, 32, 91, 111, 153, 30];
+    const UPDATE_SERVICE: [u8; 8] = [46, 169, 26, 33, 191, 78, 40, 221];
+
+    for i in 0..15 {
+        ml_dsa(&mut w, &format!("pq-{i}"));
+    }
+    for i in 0..16 {
+        service(&mut w, ADD_SERVICE, &format!("svc-{i}"));
+    }
+    let controllers = |w: &mut World| {
+        let mut data = [65u8, 40, 24, 8, 30, 81, 20, 179].to_vec();
+        data.extend_from_slice(&8u32.to_le_bytes());
+        for i in 0..8u8 {
+            data.extend_from_slice(fixed_keypair(10 + i).pubkey().as_ref());
+        }
+        data.extend_from_slice(&8u32.to_le_bytes());
+        for i in 0..8 {
+            put_str(&mut data, &format!("did:web:{}{i}", "c".repeat(119)));
+        }
+        w.send(data, true)
+    };
+    controllers(&mut w);
+    let len = w.svm.get_account(&w.pda).unwrap().data.len();
+    assert_eq!(len, 50_040, "the largest document the limits allow");
+
+    let rotation = fixed_keypair(2);
+    type Step<'a> = (&'a str, Box<dyn Fn(&mut World) -> u64 + 'a>);
+    let steps: Vec<Step> = vec![
+        (
+            "set_verification_method_flags (last method)",
+            Box::new(|w: &mut World| {
+                let mut data = [16u8, 188, 26, 223, 241, 131, 192, 223].to_vec();
+                put_str(&mut data, "pq-14");
+                data.extend_from_slice(&1u16.to_le_bytes());
+                w.send(data, false)
+            }),
+        ),
+        (
+            "update_service (last service)",
+            Box::new(|w: &mut World| service(w, UPDATE_SERVICE, "svc-15")),
+        ),
+        (
+            "remove_service (first service)",
+            Box::new(|w: &mut World| {
+                let mut data = [19u8, 102, 8, 231, 40, 141, 9, 110].to_vec();
+                put_str(&mut data, "svc-0");
+                w.send(data, true)
+            }),
+        ),
+        (
+            "add_service (sixteenth)",
+            Box::new(|w: &mut World| service(w, ADD_SERVICE, "svc-0")),
+        ),
+        (
+            "remove_verification_method (first ML-DSA-87)",
+            Box::new(|w: &mut World| {
+                let mut data = [33u8, 238, 66, 183, 62, 210, 133, 150].to_vec();
+                put_str(&mut data, "pq-0");
+                w.send(data, true)
+            }),
+        ),
+        (
+            "add_verification_method (sixteenth, Ed25519)",
+            Box::new(|w: &mut World| ed25519(w, "rotation", rotation.pubkey().as_ref())),
+        ),
+        (
+            "set_controllers (8 + 8, unchanged)",
+            Box::new(|w: &mut World| controllers(w)),
+        ),
+        (
+            "deactivate",
+            Box::new(|w: &mut World| w.send([44u8, 112, 33, 172, 113, 28, 142, 13].to_vec(), true)),
+        ),
+    ];
+
+    println!();
+    println!("{:<46} {:>10}", "instruction on a full document", "CU");
+    println!("{}", "-".repeat(58));
+    for (name, run) in steps {
+        let cu = run(&mut w);
+        println!("{name:<46} {cu:>10}");
+        assert!(
+            cu < FULL_CU_CEILING,
+            "`{name}` consumed {cu} CU (ceiling {FULL_CU_CEILING})"
+        );
+    }
+}
+
+/// Ceiling for one instruction on a full document. The costs grow with the
+/// bytes an edit walks and moves, so they sit well above the lifecycle's.
+const FULL_CU_CEILING: u64 = 25_000;

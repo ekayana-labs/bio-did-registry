@@ -1,13 +1,13 @@
 //! Account validation and rent plumbing shared by the mutating instructions.
 //!
-//! ABI:
-//!   realloc-family instructions: [payer, authority, did_account, system_program]
-//!   set_verification_method_flags: [authority, did_account]
-//!   initialize: [payer, did_account, system_program]
-//!   create_key_buffer, add_verification_method_from_buffer:
-//!     [payer, authority, did_account, key_buffer, system_program]
-//!   write_key_buffer: [authority, key_buffer]
-//!   close_key_buffer: [payer, authority, key_buffer]
+//! The account order of each instruction follows.
+//! - Realloc-family instructions take `[payer, authority, did_account, system_program]`.
+//! - `set_verification_method_flags` takes `[authority, did_account]`.
+//! - `initialize` takes `[payer, did_account, system_program]`.
+//! - `create_key_buffer` and `add_verification_method_from_buffer` take
+//!   `[payer, authority, did_account, key_buffer, system_program]`.
+//! - `write_key_buffer` takes `[authority, key_buffer]`.
+//! - `close_key_buffer` takes `[payer, authority, key_buffer]`.
 
 use pinocchio::{
     error::ProgramError,
@@ -17,12 +17,48 @@ use pinocchio::{
 use pinocchio_system::instructions::Transfer;
 
 use crate::error::{require, DidError};
+use crate::reader::{Account, Args, Reader};
 use crate::state::{
-    KeyBufferRef, ACCOUNT_DISCRIMINATOR, BASE_SPACE, DID_SEED, KEY_BUFFER_DISCRIMINATOR,
-    KEY_BUFFER_HEADER, KEY_BUFFER_SEED, OFF_BUMP, OFF_SUBJECT,
+    DidView, KeyBufferRef, ACCOUNT_DISCRIMINATOR, BASE_SPACE, DID_SEED, KEY_BUFFER_DISCRIMINATOR,
+    KEY_BUFFER_HEADER, KEY_BUFFER_SEED, OFF_BUMP,
 };
 
-/// The payer funds rent growth and receives shrink refunds: signer + writable.
+/// The accounts of an update that may resize the DID document,
+/// `[payer, authority, did_account, system_program]`, after the checks every
+/// such update makes. The account after them, if any, is the registry
+/// account of a native controller, see [`authorize`].
+pub struct Update<'a> {
+    pub payer: &'a mut AccountView,
+    pub authority: &'a AccountView,
+    pub did_account: &'a mut AccountView,
+    pub controller: Option<&'a AccountView>,
+    /// The DID's subject, which the events name.
+    pub subject: [u8; 32],
+}
+
+impl<'a> TryFrom<&'a mut [AccountView]> for Update<'a> {
+    type Error = ProgramError;
+
+    #[inline(always)]
+    fn try_from(accounts: &'a mut [AccountView]) -> Result<Self, ProgramError> {
+        let [payer, authority, did_account, system_program, rest @ ..] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+        check_payer(payer)?;
+        check_authority_signer(authority)?;
+        check_system_program(system_program)?;
+        let subject = verify_did_account(did_account)?;
+        Ok(Self {
+            payer,
+            authority,
+            did_account,
+            controller: rest.first(),
+            subject,
+        })
+    }
+}
+
+/// The payer funds rent growth and receives shrink refunds, so it is a writable signer.
 #[inline]
 pub fn check_payer(payer: &AccountView) -> Result<(), ProgramError> {
     if !payer.is_signer() {
@@ -50,8 +86,40 @@ pub fn check_system_program(system_program: &AccountView) -> Result<(), ProgramE
     Ok(())
 }
 
-/// Loads an existing `DidAccount` for mutation: everything
-/// [`load_did_account`] checks, plus the account must be writable.
+/// Checks that `signer` may update the DID in `doc`. The DID must not be
+/// deactivated, and the signer must be one of its authorities, or an
+/// authority of a native controller whose registry account is `controller`.
+/// Only the controller's own methods count, so control reaches one level.
+pub fn authorize(
+    doc: &DidView,
+    signer: &[u8; 32],
+    controller: Option<&AccountView>,
+) -> Result<(), ProgramError> {
+    require(!doc.is_deactivated(), DidError::DidDeactivated)?;
+    if doc.is_authority(signer) {
+        return Ok(());
+    }
+    let controller = controller.ok_or(DidError::Unauthorized)?;
+    let subject = load_did_account(controller)?;
+    require(doc.is_native_controller(&subject), DidError::Unauthorized)?;
+    let data = controller.try_borrow()?;
+    let parent = DidView::parse(&data)?;
+    require(
+        !parent.is_deactivated() && parent.is_authority(signer),
+        DidError::Unauthorized,
+    )
+}
+
+/// The program address for `seeds` and its bump, as `find_program_address`
+/// returns them. Each candidate costs a SHA-256 and a curve check through
+/// their syscalls rather than the 1500 CU of the PDA syscall.
+#[inline(always)]
+pub fn find_pda<const N: usize>(seeds: &[&[u8]; N]) -> Result<(Address, u8), ProgramError> {
+    Address::derive_program_address(seeds, &crate::ID).ok_or(ProgramError::InvalidSeeds)
+}
+
+/// Loads an existing `DidAccount` for mutation. It checks everything
+/// [`load_did_account`] checks, and that the account is writable.
 pub fn verify_did_account(did_account: &AccountView) -> Result<[u8; 32], ProgramError> {
     if !did_account.is_writable() {
         return Err(ProgramError::Immutable);
@@ -59,9 +127,9 @@ pub fn verify_did_account(did_account: &AccountView) -> Result<[u8; 32], Program
     load_did_account(did_account)
 }
 
-/// Loads an existing `DidAccount` read-only: owned by this program, carrying
-/// the `DidAccount` discriminator, at the PDA ["bio-did", subject] with the
-/// stored bump. Returns the subject key (needed for events).
+/// Loads an existing `DidAccount` read-only. It must be owned by this program,
+/// carry the `DidAccount` discriminator and sit at the PDA ["bio-did", subject]
+/// with the stored bump. Returns the subject, which the events need.
 pub fn load_did_account(did_account: &AccountView) -> Result<[u8; 32], ProgramError> {
     if !did_account.owned_by(&crate::ID) {
         return Err(ProgramError::InvalidAccountOwner);
@@ -70,20 +138,23 @@ pub fn load_did_account(did_account: &AccountView) -> Result<[u8; 32], ProgramEr
     if data.len() < BASE_SPACE || data[0..8] != ACCOUNT_DISCRIMINATOR {
         return Err(ProgramError::InvalidAccountData);
     }
-    let subject: [u8; 32] = data[OFF_SUBJECT..OFF_SUBJECT + 32].try_into().unwrap();
-    let bump = data[OFF_BUMP];
-    let expected = Address::create_program_address(&[DID_SEED, &subject, &[bump]], &crate::ID)
-        .map_err(|_| ProgramError::InvalidSeeds)?;
+    let mut r = Reader::<Account>::at(&data, OFF_BUMP)?;
+    let bump = r.u8()?;
+    let subject = *r.array::<32>()?;
+    // Only this program writes a `DidAccount`, and it created this one at
+    // the address `find_program_address` returned with the stored bump, so
+    // hashing the seeds again proves the address without the curve check.
+    let expected = Address::derive_address(&[DID_SEED, &subject], Some(bump), &crate::ID);
     if did_account.address() != &expected {
         return Err(ProgramError::InvalidSeeds);
     }
     Ok(subject)
 }
 
-/// Loads an existing `KeyBuffer`: writable, owned by this program, carrying
-/// the `KeyBuffer` discriminator, bound to `authority` (and to `did_account`
-/// when given), at the PDA ["bio-did-key", did_account, authority] with the
-/// stored bump.
+/// Loads an existing `KeyBuffer`. The account must be writable, owned by
+/// this program, carry the `KeyBuffer` discriminator, be bound to
+/// `authority`, and to `did_account` when one is given, and sit at the PDA
+/// ["bio-did-key", did_account, authority] with the stored bump.
 pub fn verify_key_buffer(
     key_buffer: &AccountView,
     authority: &Address,
@@ -92,7 +163,7 @@ pub fn verify_key_buffer(
     check_key_buffer(key_buffer, authority, did_account).map(|_| ())
 }
 
-/// [`verify_key_buffer`], also returning how far the upload has come:
+/// [`verify_key_buffer`], also returning how far the upload has come as
 /// `(written, key_len)`.
 pub(crate) fn check_key_buffer(
     key_buffer: &AccountView,
@@ -117,11 +188,12 @@ pub(crate) fn check_key_buffer(
     if let Some(did) = did_account {
         require(kb.did_account == did.as_ref(), DidError::InvalidKeyBuffer)?;
     }
-    let expected = Address::create_program_address(
-        &[KEY_BUFFER_SEED, kb.did_account, kb.authority, &[kb.bump]],
+    // As in `load_did_account`, the program created the buffer at this bump.
+    let expected = Address::derive_address(
+        &[KEY_BUFFER_SEED, kb.did_account, kb.authority],
+        Some(kb.bump),
         &crate::ID,
-    )
-    .map_err(|_| ProgramError::InvalidSeeds)?;
+    );
     if key_buffer.address() != &expected {
         return Err(ProgramError::InvalidSeeds);
     }
@@ -141,16 +213,17 @@ pub fn close_to(account: &mut AccountView, payer: &mut AccountView) -> Result<()
 
 /// Rent-exempt minimum for `data_len`, read from the rent sysvar.
 ///
-/// Handles both sysvar layouts: the classic 17-byte
-/// `{ lamports_per_byte_year: u64, exemption_threshold: f64, burn_percent: u8 }`
-/// (current clusters) and the condensed 8-byte `{ lamports_per_byte: u64 }`
-/// that `pinocchio::sysvars::rent::Rent` assumes. Relying on pinocchio's
-/// `Rent::get()` alone under-funds by the exemption threshold (2x) on
-/// classic-layout runtimes.
+/// Handles both sysvar layouts. Current clusters use the classic 17-byte
+/// `{ lamports_per_byte_year: u64, exemption_threshold: f64, burn_percent: u8 }`,
+/// and `pinocchio::sysvars::rent::Rent` assumes the condensed 8-byte
+/// `{ lamports_per_byte: u64 }`. Relying on pinocchio's `Rent::get()` alone
+/// under-funds by the exemption threshold on a classic-layout runtime whose
+/// threshold is 2.0. Current clusters carry 1.0.
 pub fn rent_minimum_balance(data_len: usize) -> Result<u64, ProgramError> {
     const ACCOUNT_STORAGE_OVERHEAD: u64 = 128;
-    // f64 2.0 in little-endian IEEE-754; compared bitwise to avoid float ops
-    // on the (universal) default-threshold path.
+    // f64 1.0 and 2.0 in little-endian IEEE-754. Comparing the bits avoids
+    // float ops on those thresholds.
+    const ONE_F64_LE: [u8; 8] = [0, 0, 0, 0, 0, 0, 0xf0, 0x3f];
     const TWO_F64_LE: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0x40];
 
     let bytes = ACCOUNT_STORAGE_OVERHEAD
@@ -160,21 +233,25 @@ pub fn rent_minimum_balance(data_len: usize) -> Result<u64, ProgramError> {
     let mut classic = [0u8; 17];
     match get_sysvar(&mut classic, &RENT_ID, 0) {
         Ok(()) => {
-            let lamports_per_byte_year = u64::from_le_bytes(classic[0..8].try_into().unwrap());
+            let mut r = Reader::<Account>::new(&classic);
+            let lamports_per_byte_year = r.u64()?;
+            let threshold = *r.array::<8>()?;
             let base = bytes
                 .checked_mul(lamports_per_byte_year)
                 .ok_or(ProgramError::ArithmeticOverflow)?;
-            if classic[8..16] == TWO_F64_LE {
+            if threshold == ONE_F64_LE {
+                Ok(base)
+            } else if threshold == TWO_F64_LE {
                 base.checked_mul(2).ok_or(ProgramError::ArithmeticOverflow)
             } else {
-                let threshold = f64::from_le_bytes(classic[8..16].try_into().unwrap());
+                let threshold = f64::from_le_bytes(threshold);
                 if !(threshold.is_finite() && threshold >= 0.0) {
                     return Err(ProgramError::InvalidArgument);
                 }
                 Ok((base as f64 * threshold) as u64)
             }
         }
-        // Sysvar shorter than 17 bytes: the condensed layout.
+        // A sysvar shorter than 17 bytes has the condensed layout.
         Err(ProgramError::InvalidArgument) => {
             let mut condensed = [0u8; 8];
             get_sysvar(&mut condensed, &RENT_ID, 0)?;
@@ -186,9 +263,9 @@ pub fn rent_minimum_balance(data_len: usize) -> Result<u64, ProgramError> {
     }
 }
 
-/// Rent settlement: after a resize to `new_len`, the account holds exactly
-/// the rent-exempt minimum - growth is funded by the payer (system
-/// transfer), shrinkage is refunded to the payer.
+/// Settles rent so that after a resize to `new_len` the account holds
+/// exactly the rent-exempt minimum. The payer funds growth through a system
+/// transfer and receives the refund when the account shrinks.
 pub fn settle_rent(
     did_account: &mut AccountView,
     payer: &mut AccountView,
@@ -215,7 +292,7 @@ pub fn settle_rent(
     Ok(())
 }
 
-/// Grow the account: fund the new rent minimum, then extend the data.
+/// Grow the account by funding the new rent minimum, then extending the data.
 pub fn grow(
     did_account: &mut AccountView,
     payer: &mut AccountView,
@@ -225,7 +302,7 @@ pub fn grow(
     did_account.resize(new_len)
 }
 
-/// Shrink the account (data already compacted): truncate, then refund.
+/// Shrink the already compacted account by truncating it, then refunding.
 pub fn shrink(
     did_account: &mut AccountView,
     payer: &mut AccountView,
@@ -236,64 +313,73 @@ pub fn shrink(
 }
 
 // ---------------------------------------------------------------------------
-// Instruction-argument cursor (borsh wire format, borrowed slices)
+// Instruction-argument reads, kept for callers of earlier releases
 // ---------------------------------------------------------------------------
 
+#[deprecated(note = "use `reader::Reader`")]
 #[inline(always)]
 pub fn ix_read_bytes<'a>(
     data: &'a [u8],
     off: &mut usize,
     len: usize,
 ) -> Result<&'a [u8], ProgramError> {
-    let bytes = data
-        .get(*off..*off + len)
-        .ok_or(ProgramError::InvalidInstructionData)?;
-    *off += len;
+    let mut r = Reader::<Args>::at(data, *off)?;
+    let bytes = r.bytes(len)?;
+    *off = r.offset();
     Ok(bytes)
 }
 
+#[deprecated(note = "use `reader::Reader`")]
 #[inline(always)]
 pub fn ix_read_u32(data: &[u8], off: &mut usize) -> Result<u32, ProgramError> {
-    Ok(u32::from_le_bytes(
-        ix_read_bytes(data, off, 4)?.try_into().unwrap(),
-    ))
+    let mut r = Reader::<Args>::at(data, *off)?;
+    let value = r.u32()?;
+    *off = r.offset();
+    Ok(value)
 }
 
+#[deprecated(note = "use `reader::Reader`")]
 #[inline(always)]
 pub fn ix_read_u16(data: &[u8], off: &mut usize) -> Result<u16, ProgramError> {
-    Ok(u16::from_le_bytes(
-        ix_read_bytes(data, off, 2)?.try_into().unwrap(),
-    ))
+    let mut r = Reader::<Args>::at(data, *off)?;
+    let value = r.u16()?;
+    *off = r.offset();
+    Ok(value)
 }
 
+#[deprecated(note = "use `reader::Reader`")]
 #[inline(always)]
 pub fn ix_read_u8(data: &[u8], off: &mut usize) -> Result<u8, ProgramError> {
-    Ok(ix_read_bytes(data, off, 1)?[0])
+    let mut r = Reader::<Args>::at(data, *off)?;
+    let value = r.u8()?;
+    *off = r.offset();
+    Ok(value)
 }
 
-/// Borsh `Vec<u8>` / byte payload of a `String`.
+/// A borsh `Vec<u8>`, or the byte payload of a `String`.
+#[deprecated(note = "use `reader::Reader`")]
 #[inline(always)]
 pub fn ix_read_len_prefixed<'a>(data: &'a [u8], off: &mut usize) -> Result<&'a [u8], ProgramError> {
-    let len = ix_read_u32(data, off)? as usize;
-    ix_read_bytes(data, off, len)
-}
-
-/// Borsh `String`: length-prefixed bytes that must be valid UTF-8 (borsh
-/// enforces this; we replicate it so malformed args fail the same way).
-#[inline(always)]
-pub fn ix_read_str<'a>(data: &'a [u8], off: &mut usize) -> Result<&'a [u8], ProgramError> {
-    let bytes = ix_read_len_prefixed(data, off)?;
-    core::str::from_utf8(bytes).map_err(|_| ProgramError::InvalidInstructionData)?;
+    let mut r = Reader::<Args>::at(data, *off)?;
+    let bytes = r.len_prefixed()?;
+    *off = r.offset();
     Ok(bytes)
 }
 
-/// The arguments end where the last field ends: bytes past it are a
+/// A borsh `String`, length-prefixed bytes that must be valid UTF-8.
+#[deprecated(note = "use `reader::Reader`")]
+#[inline(always)]
+pub fn ix_read_str<'a>(data: &'a [u8], off: &mut usize) -> Result<&'a [u8], ProgramError> {
+    let mut r = Reader::<Args>::at(data, *off)?;
+    let bytes = r.str()?;
+    *off = r.offset();
+    Ok(bytes)
+}
+
+/// The arguments end where the last field ends. Bytes past it are a
 /// malformed encoding, as they are for borsh's `try_from_slice`.
+#[deprecated(note = "use `reader::Reader::finish`")]
 #[inline(always)]
 pub fn ix_finish(data: &[u8], off: usize) -> Result<(), ProgramError> {
-    if off == data.len() {
-        Ok(())
-    } else {
-        Err(ProgramError::InvalidInstructionData)
-    }
+    Reader::<Args>::at(data, off)?.finish()
 }

@@ -1,6 +1,6 @@
 [package]
 name = "bio-did-registry"
-version = "0.1.2"
+version = "0.2.0"
 description = "The Solana verifiable data registry backing the did:bio DID method"
 authors.workspace = true
 edition.workspace = true
@@ -17,7 +17,7 @@ name = "bio_did_registry"
 
 [features]
 default = []
-# Build as a library (for CPI callers and clients) without the entrypoint.
+# Build as a library without the entrypoint, for CPI callers and clients.
 no-entrypoint = []
 
 [dependencies]
@@ -30,7 +30,7 @@ five8_const = "1.0.0"
 solana-address = { version = "2", features = ["curve25519"] }
 
 [dev-dependencies]
-# The test stack follows litesvm's Solana crate generation; the program
+# The test stack follows litesvm's Solana crate generation. The program
 # itself needs none of it.
 litesvm = "0.16"
 solana-message = "4"
@@ -39,7 +39,10 @@ solana-signer = "3"
 solana-keypair = "3"
 solana-pubkey = "4"
 solana-instruction = "3"
+solana-rent = "4"
 base64 = "0.23"
+sha2 = "0.11"
+proptest = "1.11"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

@@ -1,5 +1,10 @@
-//! Add a service endpoint under an authority's signature. Services live at
-//! the tail of the account, so this is a pure append and no bytes move.
+//! Replace the type and endpoint of a service under an authority's
+//! signature. The entry keeps its place, the services after it move by the
+//! size difference, and rent is settled against the payer. A metadata CID
+//! change is then one instruction and one version.
+//!
+//! The accounts are `[payer, authority, did_account, system_program]` and
+//! the args are a `Service`, as for `add_service`.
 
 use pinocchio::{
     sysvars::{clock::Clock, Sysvar},
@@ -23,23 +28,20 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
         subject,
     } = Update::try_from(accounts)?;
 
-    // The borsh arguments are Service { fragment, service_type, endpoint }.
     let mut r = Reader::<Args>::new(args);
     let fragment = r.str()?;
     let service_type = r.str()?;
     let endpoint = r.str()?;
     r.finish()?;
     let signer_key = authority.address().as_array();
-    let entry_len = service_space(fragment.len(), service_type.len(), endpoint.len());
 
-    let (old_len, svc_count_pos, svc_count) = {
+    let (start, end, old_len) = {
         let data = did_account.try_borrow()?;
         let doc = DidView::parse(&data)?;
         authorize(&doc, signer_key, controller)?;
-        let s = doc.sections();
-        require(s.svc_count < MAX_SERVICES, DidError::TooManyServices)?;
-        require(valid_fragment(fragment), DidError::InvalidFragment)?;
-        doc.require_fragment_free(fragment)?;
+        let svc = doc
+            .find_service(fragment)
+            .ok_or(DidError::ServiceNotFound)?;
         require(
             valid_uri_ascii(service_type, MAX_SERVICE_TYPE_LEN),
             DidError::InvalidServiceValue,
@@ -48,20 +50,25 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
             valid_uri_ascii(endpoint, MAX_ENDPOINT_LEN),
             DidError::InvalidServiceValue,
         )?;
-        (s.end, s.svc_count_pos, s.svc_count)
+        (svc.start, svc.end, doc.sections().end)
     };
 
-    grow(did_account, payer, old_len + entry_len)?;
+    let entry_end = start + service_space(fragment.len(), service_type.len(), endpoint.len());
+    let new_len = old_len - end + entry_end;
+    if new_len > old_len {
+        grow(did_account, payer, new_len)?;
+    }
     let now = Clock::get()?.unix_timestamp;
 
-    let new_version;
-    {
+    let new_version = {
         let mut data = did_account.try_borrow_mut()?;
-        write_service(&mut data, old_len, fragment, service_type, endpoint);
-        data[svc_count_pos..svc_count_pos + 4]
-            .copy_from_slice(&((svc_count + 1) as u32).to_le_bytes());
+        data.copy_within(end..old_len, entry_end);
+        write_service(&mut data, start, fragment, service_type, endpoint);
         touch(&mut data, now);
-        new_version = version(&data);
+        version(&data)
+    };
+    if new_len < old_len {
+        shrink(did_account, payer, new_len)?;
     }
 
     events::emit(

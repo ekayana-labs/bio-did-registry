@@ -1,31 +1,34 @@
-//! Permanently deactivate a DID (authority required). The account is shrunk
-//! to a minimal tombstone that keeps `deactivated = true` forever; unlike
-//! closing the account, the DID can never resurrect as a generative
-//! document. The freed rent is refunded to the payer.
+//! Permanently deactivate a DID under an authority's signature. The account
+//! is shrunk to a minimal tombstone that keeps `deactivated = true` forever.
+//! A closed account could resurrect as a generative document, and a
+//! tombstone never can. The freed rent is refunded to the payer.
 
 use pinocchio::{
-    error::ProgramError,
     sysvars::{clock::Clock, Sysvar},
     AccountView, ProgramResult,
 };
 
-use crate::{events, instructions::shared::*, state::*};
+use crate::{
+    events,
+    instructions::shared::*,
+    reader::{Args, Reader},
+    state::*,
+};
 
 pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
-    let [payer, authority, did_account, system_program, ..] = accounts else {
-        return Err(ProgramError::NotEnoughAccountKeys);
-    };
-    ix_finish(args, 0)?;
-    check_payer(payer)?;
-    check_authority_signer(authority)?;
-    check_system_program(system_program)?;
-    let subject = verify_did_account(did_account)?;
-    let signer_key: &[u8] = authority.address().as_ref();
+    let Update {
+        payer,
+        authority,
+        did_account,
+        controller,
+        subject,
+    } = Update::try_from(accounts)?;
+    Reader::<Args>::new(args).finish()?;
+    let signer_key = authority.address().as_array();
 
     {
         let data = did_account.try_borrow()?;
-        let s = Sections::parse(&data)?;
-        require_authority(&data, &s, signer_key.try_into().unwrap())?;
+        authorize(&DidView::parse(&data)?, signer_key, controller)?;
     }
 
     let now = Clock::get()?.unix_timestamp;
@@ -33,7 +36,7 @@ pub fn process(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     {
         let mut data = did_account.try_borrow_mut()?;
         data[OFF_DEACTIVATED] = 1;
-        // Empty all four vectors: the 16 count bytes become the whole tail.
+        // Empty all four vectors, so the 16 count bytes become the whole tail.
         data[OFF_SECTIONS..TOMBSTONE_SPACE].fill(0);
         touch(&mut data, now);
         new_version = version(&data);
