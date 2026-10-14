@@ -32,11 +32,11 @@ solana-address = { version = "2", features = ["curve25519"] }
 [dev-dependencies]
 # The test stack follows litesvm's Solana crate generation. The program
 # itself needs none of it.
-litesvm = "0.16"
+litesvm = "0.18"
 solana-message = "4"
 solana-transaction = "4"
-solana-signer = "3"
-solana-keypair = "3"
+solana-signer = "4"
+solana-keypair = "4"
 solana-pubkey = "4"
 solana-instruction = "3"
 solana-rent = "4"
